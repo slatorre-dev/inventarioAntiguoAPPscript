@@ -111,48 +111,62 @@ async function loadData(){
   const bar = document.getElementById('loadBar');
   bar.className = ''; bar.style.width = '0'; bar.offsetWidth;
   bar.className = 'is-loading';
+
+  // ── Fase 1: metadatos ligeros (aulas, cats, ciclos) ──────
   try{
-    const res = await apiGet();
-    if(!res.ok){
-      // Sesión inválida: forzar relogin
-      if(res.error && res.error.includes('autorizado')){
+    const meta = await apiGet('meta');
+    if(!meta.ok){
+      if(meta.error && meta.error.includes('autorizado')){
         localStorage.removeItem('inv_session');
         SESSION = null;
         document.getElementById('userChip').style.display = 'none';
         _hideOverlay();
         show('pLogin');
         setConn('err','Sesión expirada');
+        bar.className = '';
         return;
       }
-      throw new Error(res.error||'Error');
+      throw new Error(meta.error||'Error');
     }
-    syncSessionUser(res.user);
+    syncSessionUser(meta.user);
     showUserChip();
-    items = res.items || [];
-    profesores = res.profesores || [];
-    prestamos = res.prestamos || [];
-    if(res.aulas && res.aulas.length) AULAS = res.aulas;
-    if(res.cats && res.cats.length) CATS = Object.fromEntries(res.cats.sort((a,b)=>a.orden-b.orden).map(c=>[c.name,{c:c.c,bg:c.bg,i:c.i}]));
-    if(res.ciclos && res.ciclos.length) CICLOS = res.ciclos;
-    setConn('ok',`${items.length} ítems · sincronizado`);
+    if(meta.aulas && meta.aulas.length) AULAS = meta.aulas;
+    if(meta.cats && meta.cats.length) CATS = Object.fromEntries(meta.cats.sort((a,b)=>a.orden-b.orden).map(c=>[c.name,{c:c.c,bg:c.bg,i:c.i}]));
+    if(meta.ciclos && meta.ciclos.length) CICLOS = meta.ciclos;
     document.getElementById('btnN').style.display='flex';
     document.getElementById('btnPres').style.display='flex';
     document.getElementById('btnPed').style.display='flex';
     if(typeof applyRoleUI === 'function') applyRoleUI();
     updatePedBadge();
+    _hideOverlay();
+    bar.className = 'is-done';
+    setTimeout(()=>{bar.className='';bar.style.width='0';}, 500);
     if(location.hash && location.hash.length > 1) navigateFromHash(location.hash);
     else if(cf) openSub(); else if(currentCiclo) openCiclo(currentCiclo.id); else goHome();
   }catch(err){
     console.error(err);
     setConn('err','Error de conexión');
-    if(!items.length){
-      show('pH');
-      document.getElementById('hStats').innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="ei">⚠️</div><div class="et">No se pudo conectar.<br><small>${err.message}</small></div></div>`;
-    }
-  }finally{
+    show('pH');
+    document.getElementById('hStats').innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="ei">⚠️</div><div class="et">No se pudo conectar.<br><small>${err.message}</small></div></div>`;
     _hideOverlay();
-    bar.className = 'is-done';
-    setTimeout(()=>{bar.className='';bar.style.width='0';}, 500);
+    bar.className = '';
+    return;
+  }
+
+  // ── Fase 2: datos pesados en background (items, prestamos, profesores) ──
+  setConn('loading','Cargando inventario...');
+  try{
+    const res = await apiGet('list');
+    if(!res.ok) throw new Error(res.error||'Error');
+    items = res.items || [];
+    profesores = res.profesores || [];
+    prestamos = res.prestamos || [];
+    setConn('ok',`${items.length} ítems · sincronizado`);
+    if(typeof renderHome === 'function' && document.getElementById('pH').classList.contains('active')) renderHome();
+    else if(cf) openSub();
+  }catch(err){
+    console.error(err);
+    setConn('err','Error cargando inventario');
   }
 }
 

@@ -461,6 +461,29 @@ function doGet(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const permError = requireAction(user, action);
     if (permError) return permError;
+
+    // ── Carga ligera: solo metadatos (aulas, cats, ciclos, user) ──
+    if (action === 'meta') {
+      let aulas = rowsToObjects(ss.getSheetByName(SHEET_AULAS), HEADERS_AULAS);
+      let cats  = rowsToObjects(ss.getSheetByName(SHEET_CATS), HEADERS_CATS);
+      let ciclosRows = rowsToObjects(ss.getSheetByName(SHEET_CICLOS), HEADERS_CICLOS);
+      if (!aulas.length) aulas = AULAS_DEFAULT.map(a => ({id:a[0],name:a[1],icon:a[2],desc:a[3],th:a[4],orden:a[5]}));
+      aulas.sort((a,b)=>(Number(a.orden)||0)-(Number(b.orden)||0));
+      if (!cats.length) cats = CATS_DEFAULT.map(c => ({name:c[0],c:c[1],bg:c[2],i:c[3],orden:c[4]}));
+      cats.sort((a,b)=>(Number(a.orden)||0)-(Number(b.orden)||0));
+      let ciclos = [];
+      if (ciclosRows.length) {
+        ciclosRows.sort((a,b)=>(Number(a.cicloOrden)||0)-(Number(b.cicloOrden)||0)||(Number(a.modOrden)||0)-(Number(b.modOrden)||0));
+        const cicloMap = {}, cicloOrder = [];
+        ciclosRows.forEach(r => {
+          if (!cicloMap[r.cicloId]) { cicloMap[r.cicloId]={id:r.cicloId,name:r.cicloNombre,nivel:r.nivel,icon:r.icon,th:r.th,desc:r.desc,modulos:[]}; cicloOrder.push(r.cicloId); }
+          if (r.modCod) cicloMap[r.cicloId].modulos.push({cod:String(r.modCod),name:r.modNombre,horas:Number(r.modHoras)||0});
+        });
+        ciclos = cicloOrder.map(id => cicloMap[id]);
+      }
+      return json({ ok: true, aulas, cats, ciclos, user });
+    }
+
     const items      = rowsToObjects(ss.getSheetByName(SHEET_INVENTARIO), HEADERS_INV);
     const profesores = rowsToObjects(ss.getSheetByName(SHEET_PROFESORES), HEADERS_PROF)
       .filter(p => String(p.nombre || '').trim() !== '' && String(p.nombre || '').trim().toLowerCase() !== 'departamento');
