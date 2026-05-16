@@ -1,0 +1,296 @@
+# Inventario Taller FP — IES Juan Bosco
+
+SPA de inventario para el departamento de Electricidad y Electrónica. Vanilla JS sin framework, backend Google Apps Script, hosting Cloudflare Pages.
+
+## Stack
+- Frontend: HTML/CSS/JS vanilla, sin ES modules (compatible file://)
+- Backend: Google Apps Script (REST API GET/POST), URL en `js/state.js`
+- Auth: localStorage `inv_session`
+- Hosting: Cloudflare Pages — auto-deploy desde GitHub (rama `main`)
+- URL producción: https://inventariodepartamento.pages.dev/
+- Repo: https://github.com/sebantonio/inventarioDepartamento.git
+
+## Memory (sincronización multi-PC)
+La carpeta `.claude/memory/` contiene notas persistentes de Claude sobre el proyecto (arquitectura, feedback, QR scanner, etc.). Se sincroniza en GitHub para acceso desde cualquier PC.
+
+**Setup en nuevo PC**:
+1. Clonar repo normalmente
+2. Ejecutar script de sincronización (bash/PowerShell):
+   ```bash
+   # Linux/Mac
+   mkdir -p ~/.claude/projects/c--OneDrive-OneDrive---Consejer-a-de-Educaci-n--Cultura-y-Deportes-Castilla-La-Mancha-DOCUMENTOS-DEL-BOSCO-Curso-2025-2026-Pagina-inventario-Departamento/memory
+   cp -r .claude/memory/* ~/.claude/projects/c--OneDrive-OneDrive---Consejer-a-de-Educaci-n--Cultura-y-Deportes-Castilla-La-Mancha-DOCUMENTOS-DEL-BOSCO-Curso-2025-2026-Pagina-inventario-Departamento/memory/
+   
+   # Windows PowerShell
+   $claude_projects = "$env:USERPROFILE\.claude\projects\c--OneDrive-OneDrive---Consejer-a-de-Educaci-n--Cultura-y-Deportes-Castilla-La-Mancha-DOCUMENTOS-DEL-BOSCO-Curso-2025-2026-Pagina-inventario-Departamento\memory"
+   mkdir $claude_projects -Force | Out-Null
+   Copy-Item -Path ".\.claude\memory\*" -Destination $claude_projects -Recurse -Force
+   ```
+
+O **manual**: copiar `.claude/memory/` del repo a `~/.claude/projects/[project-path]/memory/` en tu carpeta de usuario.
+
+**Contenido de memory**:
+- `MEMORY.md` — Índice de notas
+- `user_profile.md` — Perfil del usuario
+- `project_overview.md` — Funcionalidades y estado
+- `project_architecture.md` — Stack y estructura
+- `feedback_workflow.md` — Preferencias de trabajo
+- `qr_scanner.md` — Implementación QR scanner con detalles técnicos
+
+Cambios en memory se syncronizarán automáticamente en GitHub si editas desde `.claude/memory/` en el repo.
+
+## Estructura de archivos JS (orden de carga en index.html)
+config → state → roles → api → docs → search → home → inventory → modal-item → modal-aulas → modal-cats → modal-ciclos → prestamos → import → nav → docs-dpto → pwa → profile → reset → auth
+
+- `js/config.js` — AULAS_DEFAULT, CICLOS (5 ciclos con módulos, incl. Departamento; `let` reemplazable desde backend), CATS_DEFAULT (11), findModulo()
+- `js/state.js` — API_URL, SESSION, items, cf, view, show(), setConn(), needsMaintenance()
+- `js/roles.js` — permisos frontend, ACTION_PERMISSIONS, can(), applyRoleUI()
+- `js/api.js` — urlWithAuth(), apiGet(), apiPost()
+- `js/auth.js` — doLogin(), logout(), loadData() (con barra de progreso #loadBar), DOMContentLoaded
+- `js/nav.js` — goHome(), goAula(), goCat(), goLowStock(), goMaintenance(), openCiclo(), goMod(), openSub(), toggleDeptMenu(), closeDeptMenu()
+- `js/search.js` — globalSearch(), gsKey(), gsGo(), gsClear()
+- `js/home.js` — renderHome(), renderLoanBanner()
+- `js/inventory.js` — renderInv(), rTable(), rCards(), openExportModal(), exportCSV(), exportAllItemsCSV(), exportFullBackup(), toast()
+- `js/modal-item.js` — openModal(), saveItem(), pedidos, QR individual y printBulkItemQrs()
+- `js/modal-aulas.js` — openAulasModal(), saveAulas()
+- `js/modal-cats.js` — openCatsModal(), saveCats()
+- `js/modal-ciclos.js` — openCiclosModal(), saveCiclos(), showNewCicloForm(), confirmAddCiclo(), addModuloRow(), removeModuloRow()
+- `js/prestamos.js` — renderPrestamos(), openPrestar(), openDevolver(), saveProfesores(), openPresDevModal(), closePresDevModal(), openUsuariosModal(), saveUsuarios(), _renderGrouped()
+- `js/import.js` — openImportModal(), parseCSV(), impDoImport(), restoreBackupJson()
+- `js/docs.js` — loadItemDocs(), addDocFiles(), uploadPendingDocs(), openDocsModal(itemId), closeDocsModal(), saveDocsModal()
+- `js/docs-dpto.js` — goDocsDpto(), DOCS_DPTO_URL (SharePoint)
+- `js/pwa.js` — SW registration, beforeinstallprompt, installPWA()
+- `js/profile.js` — goProfile(), saveProfile(), doChangePassword()
+- `js/reset.js` — showRecovery(), requestReset(), showResetPage(), doResetPassword()
+- `js/qr-scanner.js` — openQrScanner(), closeQrScanner(), _startQrProcessing() — escanea QR en tiempo real con jsQR (CDN)
+
+## PWA
+- manifest.json: start_url "./" (NO "./index.html" — Cloudflare redirige esa URL)
+- sw.js: VERSION='v73', dos cachés CACHE_SHELL + CACHE_RUNTIME, stale-while-revalidate para fonts
+- Para forzar actualización en clientes: subir VERSION en sw.js
+- `.gitignore` en raíz del repo excluye *.zip y otros archivos grandes
+- pwa.js: actualización automática tras 5 segundos o al hacer clic en notificación (SKIP_WAITING)
+
+## Cloudflare Pages — reglas de despliegue
+- Auto-deploy desde GitHub rama `main`
+- **Límite por archivo: 25 MB** — archivos mayores rompen el deploy con "failed in 0s"
+- NUNCA commitear ZIPs, RARs ni archivos binarios grandes al repo
+- Si el deploy falla en 0 segundos: comprobar si hay archivos >25 MB en git (`git ls-files | xargs ls -la`)
+
+## Google Sheet — hojas relevantes
+- **Usuarios**: usuario | password | nombre | rol | Email — login de la app; rol='Jefe Departamento' recibe CC en todos los emails
+- **Profesores**: id | nombre | departamento | email — prestatarios (quién pide prestado)
+- **Modulos**: col A = código numérico (ej: 237) | col B = nombre módulo | col C = nombre profesor/a responsable
+  - GAS busca por código: `Number(modRows[i][0]) === Number(pres.moduloCod)`
+  - `pres.moduloCod` = parte tras `__` en el modId del ítem (ej: `gm_telecom__0237` → `0237`)
+  - Nombre en col C debe coincidir EXACTAMENTE con campo `nombre` en hoja Usuarios
+
+## Reglas importantes
+- NUNCA usar `const show` como nombre de variable en ningún JS — shadowing de show() en state.js rompe toda la navegación
+- Los módulos se guardan en ítems como `cicloId__cod` (ej: `gm_telecom__0237`, `departamento__dpto`) — usar findModulo() para resolverlos
+- Barra de progreso #loadBar: se activa en loadData() antes del await apiGet(), se cierra en finally
+- loadData() hace `show('pH')` ANTES del await apiGet() para evitar pantalla en blanco
+- El Departamento como módulo genérico: `id:'departamento'`, módulo `cod:'dpto'` → se guarda como `departamento__dpto`
+- `Number('dpto')` = NaN → la búsqueda en hoja Modulos no encuentra nada → no se envía email de préstamo (comportamiento correcto, no tiene responsable de módulo)
+
+## Sistema de roles (implementado 2026-05-05)
+Fuente de verdad: columna `rol` de hoja **Usuarios**. Frontend en `js/roles.js`; backend en `appscript.txt` con `requireAction(user, action)`.
+- `Jefe Departamento` / `Jefe de Departamento` / `Administrador` / `admin`: acceso completo.
+- `profesor`: añadir/editar ítems, bajas, documentos, préstamos/devoluciones, pedidos y perfil. No puede eliminar definitivamente, importar CSV, gestionar aulas/categorías/ciclos ni gestionar profesores.
+- `consulta` / `lector`: lectura + perfil/contraseña.
+La ocultación de botones es solo UX; la protección real está en Apps Script. Si se añade una acción nueva en GAS, añadirla también a `ACTION_PERMISSIONS` en `js/roles.js` y `appscript.txt`.
+Memoria complementaria: `.claude/memory.md`.
+
+## Rendimiento móvil/tablet (ajustado 2026-05-06)
+- `js/inventory.js`: el handler de `resize` solo vuelve a renderizar si cambia el modo tabla/tarjetas. En móviles, el navegador dispara `resize` al enseñar/ocultar la barra superior durante el scroll; renderizar todas las tarjetas en cada evento provoca lags y bloqueos de desplazamiento.
+- `js/inventory.js`: listado de inventario paginado en tabla y tarjetas. Valor inicial 25 ítems/página; selector disponible 10, 25, 30 y 50. No usar render por tandas con `requestAnimationFrame`, porque empeoró el pintado en Chrome/Edge/Firefox.
+- `css/styles.css`: en pantallas <=900px las tarjetas y botones desactivan animaciones/transiciones/transform hover costosos y reducen sombra para mejorar scroll en móviles/tablets. No usar `contain: layout paint` en `.icard`: en Chrome/Edge/Firefox móvil puede provocar tarjetas en blanco que aparecen al desplazar.
+- `css/styles.css`: tablets táctiles y pantallas <=1200px usan modo ligero (`hover:none`, `pointer:coarse`, `max-width:1200px`) sin animaciones/transforms en tarjetas, botones y cards. `topbar` usa `min-height` en vez de `height` para no cortar contenido si la barra se adapta. Login alineado arriba para no quedar cortado por barras del navegador.
+- Tablets/dispositivos táctiles: forzar vista tarjetas. `getInvRenderMode()` devuelve `cards` si `(hover:none)` o `(pointer:coarse)`; CSS oculta `.vtog` y `.tw` en dispositivos táctiles.
+- Modo táctil compacto: una columna de tarjetas, `topbar` sin `sticky`, páginas sin `min-height`, cards sin sombra, home grids a 2 columnas, primera carga de inventario a 10 ítems/página salvo que el usuario elija otra cantidad.
+- En táctiles se eliminan efectos visuales secundarios: animaciones/transiciones globales, sombras, filtros, `backdrop-filter`, transforms indirectos y degradados pesados en elementos principales.
+- Excepción táctil permitida: solo animación inicial de `#loadOverlay` con `lo-pulse-lite` (transform/opacidad, sin animar sombras). No reactivar animaciones de tarjetas/listados del inventario en tablet.
+- Tras cambios de CSS/JS de rendimiento, subir `VERSION` en `sw.js` para que la PWA no sirva recursos antiguos desde caché.
+
+## Auditoría de acciones (implementado 2026-05-05)
+GAS crea automáticamente hoja **Log** con columnas `fecha | usuario | nombre | rol | accion | itemId | resumen`.
+Helper principal: `auditLog(ss, user, accion, itemId, resumen)` en `appscript.txt`.
+Se registran altas/ediciones/eliminaciones de ítems, importación CSV, profesores, aulas/categorías/ciclos, préstamos/devoluciones, documentos, perfil, cambio de contraseña y notificación de pedidos.
+
+## Botón combinado Prestar/Devolver (implementado 2026-05-03)
+En rTable y rCards de inventory.js, el botón ⌛ llama a `openPresDevModal(itemId)` (en prestamos.js).
+El modal `#mPresDevPicker` muestra:
+- Botón "📤 Nuevo préstamo" → llama `openPrestar(itemId)`
+- Lista de préstamos activos del ítem con botón "Devolver" por préstamo → llama `openDevolver(presId)`
+Variables globales en prestamos.js: `let _pickerItemId = null;`
+Bug fix: `openDevolver()` resetea `btnDevolverSave.disabled = false` al inicio (antes quedaba bloqueado tras primera devolución).
+
+## Emails al Jefe de Departamento (implementado 2026-05-03)
+GAS: TODOS los usuarios con `rol === 'Jefe Departamento'` reciben email (antes solo el primero encontrado).
+Patrón correcto en las 3 acciones (prestar, devolver, notificarPedido):
+```javascript
+const jefeEmails = [];
+for(let i=1;i<usersData.length;i++){
+  if(usersData[i][3]==='Jefe Departamento' && usersData[i][4]) jefeEmails.push(usersData[i][4]);
+}
+// Luego: jefeEmails.join(',') para CC, o jefeEmails.join(',') para TO en pedidos
+```
+NO usar `break` tras encontrar el primero. Colectar en array y usar `.join(',')`.
+
+## Modal de documentación independiente (implementado 2026-05-03)
+- `#mDocs` en index.html — modal propio para ver/subir/eliminar docs de un ítem
+- Botón 📌 en tabla y tarjetas llama a `openDocsModal(itemId)`
+- Estado propio: `_dmItem`, `_dmActuales`, `_dmPendientes` (no comparte estado con modal de edición)
+- `saveDocsModal()` sube pendientes vía `action=uploadDoc` y refresca la lista
+
+## Otras mejoras (implementadas 2026-05-03)
+- Ciclo y módulo **obligatorios** en `saveItem()` — toast de error si no están seleccionados
+- Botón "Nuevo préstamo" en subheader de `pS` (aulas/categorías/módulos)
+- Cabecera tabla "Acciones" (antes "Acc.")
+- `deploy.ps1` — script PowerShell para commit+push a GitHub con mensaje descriptivo interactivo
+- `action=notificarPedido` en GAS — email al Jefe Departamento al añadir ítem al carrito 🛒
+- `action=devolver` — email al responsable del módulo + profesor que tomó prestado + CC todos los Jefes
+
+## Botón combinado Baja/Eliminar — modal picker (implementado 2026-05-04)
+En rTable y rCards de inventory.js, los botones ⛔ (baja) y 🗑 (eliminar) se reemplazaron por un único botón **🗑️** que abre el modal `#mDelPicker`.
+El modal tiene **dos pasos**:
+- **Paso 1** (`#delPickerStep1`): buscador de ítem — visible cuando se abre sin ID (botón rápido de página). `delPickerFilter()` filtra por nombre/ref; muestra ítems del contexto actual si hay `cf` activo. `delPickerSelect(id)` pasa al paso 2.
+- **Paso 2** (`#delPickerStep2`): opciones **🚮 Dar de baja** (oculto si ya está en Baja) + **⛔ Eliminar definitivamente**. Visible directamente cuando se llama con ID desde la fila/tarjeta.
+- `openDelModal(itemId?)` — acepta ID (directo a paso 2) o sin args (muestra paso 1 con buscador)
+- `closeDelModal()` cierra el modal; añadido al handler de Escape en auth.js
+- **NO usar `.del-wrap` / `.del-menu`** — ese CSS fue eliminado (el dropdown quedaba cortado por overflow de tabla)
+- Botón 🗑️ Dar de baja añadido como **acción rápida** en home hero y en el toolbar del subheader de pS
+- Icono de préstamos: **⌛** en todos los botones (antes 🔁 — conflicto visual con 🔄 de recargar)
+
+## Pantalla de carga animada (implementada 2026-05-04)
+`#loadOverlay` en index.html — overlay de pantalla completa que cubre todo mientras loadData() espera la API.
+- Muestra: logo (favicon.svg con pulso CSS), título, subtítulo, tres puntos rebotando
+- `_hideOverlay()` en auth.js: añade clase `lo-hide` (opacity:0) y tras 480ms pone `display:none`
+- Se oculta en el `finally` de loadData(), también si sesión inválida o sin sesión → login
+- NO se muestra en recargas tras login (overlay ya está `display:none`)
+- Icono ⌛ uniforme en TODOS los botones de préstamo: filas inventario Y botones "Nuevo préstamo" independientes (home hero, subpágina pS, página préstamos pPres)
+
+## Mantenimiento / reparación (implementado 2026-05-06)
+- Campo persistente `mant` en inventario. `HEADERS_INV` en `appscript.txt`: `id|ref|aula|mod|item|qty|min|cat|loc|est|util|fecha|mant|mantFecha|mantNota|mantResp|mantEstado|mantSolicitante|mantSolicitanteEmail|foto|obs|code`.
+- Backend: `ensureHeaders(sheet, headers)` migra hojas existentes e inserta la columna `mant` sin perder datos. Tras modificar `appscript.txt`, copiarlo al editor de Apps Script y redesplegar.
+- Frontend: `needsMaintenance(item)` en `js/state.js` devuelve true si `mant` es `1`/true o si `est === 'Avería'`.
+- Modal de ítem: checkbox `#f_mant` "Necesita mantenimiento o reparación"; detalles en `#maintFields`: `mantFecha`, `mantEstado` (`Pendiente`, `En reparación`, `Reparado`, `Resuelto`), `mantResp`, `mantNota`.
+- `saveItem()` guarda `mant:'1'` o vacío y los detalles de la cola. `needsMaintenance()` excluye `mantEstado === 'Reparado'` o `Resuelto`, pero conserva los datos históricos si el ítem sigue marcado.
+- Home: la tarjeta "espacios" fue eliminada. En su lugar hay tarjeta "mantenimiento" junto a "stock bajo" y botón rápido `🛠️ Mantenimiento`.
+- Navegación: `goMaintenance()` usa ruta `#maintenance` y `cf.type === 'maintenance'`; `getBase()` filtra con `needsMaintenance()`.
+- Listados: tarjetas muestran píldora con estado de mantenimiento y bloque `.maint-note` con fecha, responsable y nota; tabla antepone resumen de mantenimiento en Utilidad.
+- CSV: importación/exportación incluyen `Mantenimiento`, `Fecha aviso mant.`, `Estado mant.`, `Responsable mant.`, `Nota mant.`; import acepta valores afirmativos como `1`, `si/sí`, `true`, `x`, `ok`, `reparacion`, `mantenimiento`, `averia`.
+- Backend: `notifyMaintenanceChange()` avisa por email al responsable del módulo (hoja `Modulos`, col C -> `Usuarios.email`) y en CC al solicitante. Se dispara al activar mantenimiento y al cambiar a `En reparación`, `Resuelto` o `Reparado`. `mantSolicitante`/`mantSolicitanteEmail` se guardan internamente para conservar quién lo pidió.
+
+## Foto principal del ítem (implementado 2026-05-06)
+- Campo persistente `foto` en inventario, guardado como miniatura `data:image/jpeg` pequeña dentro del propio ítem para que las tarjetas carguen rápido y funcionen offline.
+- Modal de ítem: hidden `#f_foto` y preview `#f_foto_preview`. Al hacer/subir una imagen en documentación, `addDocFiles()` llama automáticamente a `setMainPhotoFromFile()`.
+- `setMainPhotoFromFile()` reduce la imagen a máximo 360px y calidad 0.45 antes de guardar en `foto`.
+- Si un ítem existente no tiene `foto`, `loadItemDocs()` llama a `syncMainPhotoFromDocs()` y usa la primera imagen adjunta de Drive como miniatura (`driveThumbSrc(driveId)`).
+- Tarjetas de inventario: si `x.foto` existe, muestran `<img class="card-photo">` con `aspect-ratio:16/9` y `object-fit:cover`. Tabla: columna `Foto` con miniatura `.table-photo`.
+- No exportar la foto en CSV: el base64 haría el CSV pesado y poco legible.
+
+## QR por ítem (actualizado 2026-05-06)
+- Modal de ítem muestra QR solo para ítems existentes; usa URL `#item/<code>` con código estable `code` o `IB-00001` derivado de `id`.
+- `openItemRoute(id)` acepta id, code o ref, carga el contexto del aula del ítem y abre su modal. Si el usuario no tiene `items.write`, el modal queda en lectura.
+- Tabla y tarjetas muestran un botón compacto con `icons/qr-code.svg` junto al nombre del ítem; llama a `openItemQr(id)` para abrir directamente el QR sin entrar en edición.
+- `printBulkItemQrs()` imprime etiquetas QR en A4 para los ítems del filtro actual (`getFiltered()`): aula, categoría, módulo, stock bajo, mantenimiento y búsqueda/filtros activos.
+- El SVG `./icons/qr-code.svg` está incluido en `sw.js`; subir `VERSION` si cambia el icono o la impresión QR.
+
+## Escaneo QR (actualizado 2026-05-06)
+- Librería `jsQR` v1.4.0 desde CDN (en `index.html` sin `defer` para carga síncrona)
+- Botones QR en **topbar** (`btnQr`) y **buscador global** (`gsQr`) abren modal `#mQrScanner` vía `openQrScanner()`
+- Modal abierto con `classList.add('open')` (aplica clase CSS que controla `opacity:1` y `pointer-events:all`)
+- `js/qr-scanner.js`:
+  - `openQrScanner()` activa `getUserMedia` (cámara trasera `facingMode: 'environment'`)
+  - `_startQrProcessing(video)` procesa frames en `requestAnimationFrame` con canvas + jsQR
+  - Detecta patrones `item/[a-zA-Z0-9_-]+` en datos QR, detiene la cámara y muestra acciones rápidas
+  - Acciones rápidas: abrir ficha, prestar/devolver, marcar mantenimiento, documentos y baja
+  - La acción prestar/devolver del QR no debe deshabilitarse por stock/permisos en el panel QR; abre `openPresDevModal(id)` tras cerrar el escáner y el propio modal gestiona si se puede crear préstamo o solo devolver
+  - `closeQrScanner()` detiene tracks de stream y cierra modal removiendo clase `'open'`
+  - jsQR usa `inversionAttempts: 'attemptBoth'` para mejor detección en diferentes condiciones de luz
+- Modal muestra video en vivo; funciona en Android/tablets con cámara; iOS tiene restricciones en `getUserMedia`
+- **Nota crítica**: cambios recientes al CSS requieren `classList.add('open')` y `.mbg.open { opacity: 1; pointer-events: all }`
+
+## Exportación / backup (implementado 2026-05-06)
+- El botón superior `btnE` muestra "Exportar" y abre el modal `#mExport` con `openExportModal()`.
+- Opciones: CSV de vista actual (`exportCSV()`), CSV completo de ítems (`exportAllItemsCSV()`) y backup completo JSON (`exportFullBackup()`).
+- El backup JSON se genera en navegador con los datos ya cargados: `inventario`, `aulas`, `categorias`, `ciclos`, `prestamos`, `profesores` y `meta`; no incluye la contraseña de sesión.
+- `#mImport` acepta `.json`; `restoreBackupJson()` previsualiza y permite restaurar secciones seleccionadas: inventario, aulas, categorías, ciclos y profesores.
+- Backend: `action=restoreBackup` reemplaza por completo solo las hojas seleccionadas y registra `restoreBackup` en auditoría. No restaura préstamos.
+- `Escape` cierra `#mExport` desde el handler global de `js/auth.js`.
+
+## Vista de préstamos agrupada (implementado 2026-05-07)
+Página de préstamos tiene 6 tabs: Activos | Vencidos | Historial | **Por profesor** | **Por aula** | **Por material**.
+- Las 3 tabs de agrupación muestran solo préstamos activos, ordenados: grupos con vencidos primero.
+- `_renderGrouped(groupKey)` en `prestamos.js` — agrupa por `profesorId`, `aulaOrigen` o `itemId`.
+- Cada grupo muestra badge rojo si tiene vencidos; cada fila tiene botón "📥 Devolver" directo.
+- El buscador y toolbar se ocultan en las tabs agrupadas (`isGrouped` en `goPrestamos()`).
+- `.pres-tabs` usa `flex-wrap` para que las 6 tabs quepan en móvil.
+
+## Banner de préstamos filtrado por rol (implementado 2026-05-07)
+`renderLoanBanner()` en `home.js` comprueba el rol del usuario logueado:
+- **Jefe Departamento / Admin**: ve todos los préstamos activos/vencidos del departamento.
+- **Otros roles**: solo ve el banner si `SESSION.nombre` coincide con `profesorNombre` en algún préstamo activo (comparación en minúsculas). Sin préstamos propios → sin banner.
+
+## Gestión de usuarios de la app (implementado 2026-05-07)
+Modal `#mUsuarios` accesible solo para Jefes/Admin. Botón en menú ⚙️ Departamento y antes en toolbar de préstamos.
+- `openUsuariosModal()` carga usuarios vía `apiPost({action:'getUsers'})` — no devuelve contraseñas.
+- **Fila 2** de hoja Usuarios = usuario genérico `Departamento` — siempre protegido: `getUsers` salta `i=2`, `userAdd/Update/Delete/ResetPassword` arrancan en `i=2`.
+- `userAdd` usa `appendRow` (el genérico ya está fijo en fila 2, los nuevos van al final).
+- Roles disponibles en el selector: `Jefe Departamento`, `profesor`, `consulta`, `lector`.
+- Botón **🔑 Reset** de contraseña por usuario (sin guardar todo el formulario).
+- Protecciones: no puede editarse/eliminarse el usuario genérico, no puede cambiarse el propio rol de Jefe, no puede eliminarse la propia cuenta.
+- GAS: acciones `getUsers`, `userAdd`, `userUpdate`, `userDelete`, `userResetPassword` con permiso `config.manage`.
+- Auditoría: todas las acciones quedan registradas en hoja Log.
+
+## Gestión de profesores prestatarios — filtrado (implementado 2026-05-07)
+- GAS filtra al devolver la lista: excluye profesores con `nombre` vacío y el llamado "Departamento".
+- Frontend: `openProfModal()` y selector de préstamos también filtran por `nombre` no vacío y distinto de "departamento" (defensa en profundidad).
+
+## Botón ⚙️ Departamento — menú centralizado (implementado 2026-05-07)
+Dropdown en topbar, visible solo para Jefes/Admin (`can('config.manage')`). Implementado en `#deptMenuWrap` / `#deptMenu`.
+- **Estructura**: 🏫 Aulas · 🏷️ Categorías · 📚 Ciclos y módulos
+- **Personas**: 👥 Profesores prestatarios · 🔐 Usuarios de la app
+- **Datos**: 📤 Importar · 📥 Exportar / Backup
+- Se cierra al pulsar cualquier opción o al hacer clic fuera (`document.addEventListener('click',...)`).
+- Para Jefes/Admin: `btnE` (Exportar) y `btnImp` (Importar) de la topbar quedan ocultos — ya están en el menú.
+- Para otros roles: `btnE` y `btnImp` siguen visibles en topbar según permisos.
+
+## Botón 🔄 Recargar — reubicado (implementado 2026-05-07)
+- Movido de `#topbarBtns` (derecha) a `.brand-wrap` (izquierda, junto al logo y título).
+- Estilo `.tbtn-reload`: discreto, sin borde, color atenuado.
+- Fuera del menú móvil `#topbarBtns` → no aparece en el desplegable de ⋮.
+- HTML: `<div class="brand-wrap">` agrupa `.brand` + `#btnReload`.
+
+## Funcionalidades implementadas (estado 2026-05-07)
+- Login / logout / recuperación de contraseña por email (reset.js)
+- Perfil de usuario: editar nombre, email, cambiar contraseña (profile.js)
+- Inventario por aula, categoría y módulo con tabla y tarjetas
+- Buscador global en topbar (atajo / o Ctrl+K)
+- Añadir/editar ítems con documentos adjuntos (base64 → GAS → Drive)
+- Bajas y pedidos (localStorage inv_pedidos); pedido notifica por email a TODOS los Jefes de Departamento
+- Préstamos: botón ⌛ combinado prestar/devolver desde inventario; ver activos/vencidos/histórico
+- **Email automático al prestar**: GAS busca responsable del módulo en hoja Modulos (col A=código, col B=nombre módulo, col C=nombre profesor) → email al responsable + CC a todos los Jefes de Departamento
+- **Email automático al devolver**: mismo flujo, notifica la devolución
+- Módulo genérico "Departamento" disponible en todos los ítems (config.js CICLOS[4])
+- Importar CSV con mapeo de columnas
+- Documentación del departamento: iframe SharePoint + botón externo
+- PWA instalable, funciona offline (cache-first sw v60)
+- Pantalla de carga animada (#loadOverlay) con logo + puntos rebotando
+- Barra de progreso animada #loadBar durante carga inicial
+- **Botón 🗑️ Dar de baja** como acción rápida en home hero y subheader pS (abre modal con buscador si no hay ítem previo)
+- QR por ítem en el modal de edición/ver, botón compacto con `icons/qr-code.svg` junto al nombre en tabla/tarjetas e impresión masiva de etiquetas desde pS.
+- Mantenimiento/reparación por ítem: checkbox en modal, tarjeta y botón rápido en home, ruta `#maintenance`, CSV y backend con columna `mant`.
+- Foto principal por ítem: miniatura local en campo `foto`, visible en tarjetas.
+- Exportación con modal de opciones: CSV filtrado, CSV completo y backup JSON completo.
+
+## appscript.txt
+Contiene el código completo del backend GAS. Para actualizar el backend hay que copiar el contenido en el editor de Google Apps Script y redesplegar como aplicación web.
+
+Acciones GAS relevantes:
+- `action=prestar` — registra préstamo + envía email al responsable del módulo + CC todos los Jefes
+- `action=devolver` — registra devolución + envía email de notificación + CC todos los Jefes
+- `action=ciclosSync` — sync completo hoja Ciclos (una fila por módulo: cicloId|cicloNombre|nivel|icon|th|desc|modCod|modNombre|modHoras|cicloOrden|modOrden)
+- `action=notificarPedido` — email a TODOS los Jefes de Departamento con lista de pedidos
+- `action=profAdd/profUpdate/profDelete` — CRUD de profesores prestatarios

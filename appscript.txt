@@ -1,0 +1,1308 @@
+// ═══════════════════════════════════════════════════════════════
+// INVENTARIO TALLER FP — Backend completo
+// Login + Inventario + Aulas + Profesores + Préstamos
+// ═══════════════════════════════════════════════════════════════
+
+const SHEET_INVENTARIO = 'Inventario';
+const SHEET_USUARIOS   = 'Usuarios';
+const SHEET_PROFESORES = 'Profesores';
+const SHEET_PRESTAMOS  = 'Prestamos';
+const SHEET_AULAS      = 'Aulas';
+const SHEET_CATS       = 'Categorias';
+const SHEET_DOCS       = 'Documentos';
+const SHEET_MODULOS    = 'Modulos';
+const SHEET_CICLOS     = 'Ciclos';
+const SHEET_LOG        = 'Log';
+
+const HEADERS_INV   = ['id','ref','aula','mod','item','qty','min','cat','loc','est','util','fecha','mant','mantFecha','mantNota','mantResp','mantEstado','mantSolicitante','mantSolicitanteEmail','foto','obs','code'];
+const HEADERS_USR   = ['usuario','password','nombre','rol','email'];
+const HEADERS_PROF  = ['id','nombre','departamento','email'];
+const HEADERS_PRES  = ['id','itemId','itemNombre','cantidad','aulaOrigen','aulaDestino','profesorId','profesorNombre','gestionadoPor','fechaPrestamo','fechaPrevista','fechaDevolucion','cantidadDevuelta','estado','obs'];
+const HEADERS_AULAS = ['id','name','icon','desc','th','orden'];
+const HEADERS_CATS  = ['name','c','bg','i','orden'];
+const HEADERS_DOCS   = ['id','itemId','itemNombre','aulaId','fileName','driveId','driveUrl','fecha'];
+const HEADERS_CICLOS = ['cicloId','cicloNombre','nivel','icon','th','desc','modCod','modNombre','modHoras','cicloOrden','modOrden'];
+const HEADERS_LOG    = ['fecha','usuario','nombre','rol','accion','itemId','resumen'];
+
+const CATS_DEFAULT = [
+  ['Componentes electrónicos','#2563eb','#eff6ff','⚡',1],
+  ['Herramientas','#d97706','#fffbeb','🔨',2],
+  ['Equipos de medida','#0891b2','#ecfeff','📊',3],
+  ['Consumibles','#7c3aed','#f5f3ff','📦',4],
+  ['Fibra óptica','#059669','#ecfdf5','💡',5],
+  ['Telecomunicaciones','#ea580c','#fff7ed','📡',6],
+  ['Material eléctrico','#db2777','#fdf2f8','🔌',7],
+  ['Redes','#0e7490','#f0fdfa','🌐',8],
+  ['Domótica','#7e22ce','#faf5ff','🏠',9],
+  ['Ordenadores','#1d4ed8','#eff6ff','💻',10],
+  ['Otros','#6b7280','#f9fafb','🔧',11],
+];
+
+const AULAS_DEFAULT = [
+  ['aula35','Aula 35','🔧','Mantenimiento Electrónico','th-blue',1],
+  ['aula36','Aula 36','⚡','Electrónica','th-purple',2],
+  ['aula38','Aula 38','💡','Electricidad','th-amber',3],
+  ['aula39','Aula 39','🔌','Electricidad','th-orange',4],
+  ['aula40','Aula 40','📡','Electrónica','th-teal',5],
+  ['aula41','Aula 41','🛠️','Electrónica','th-green',6],
+];
+
+// ─── AUTH ────────────────────────────────────────────────────────
+function verificarLogin(usuario, password) {
+  if (!usuario || !password) return null;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_USUARIOS);
+  if (!sheet) return null;
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    const u = String(data[i][0] || '').trim();
+    const p = String(data[i][1] || '').trim();
+    if (u && p && u === String(usuario).trim() && p === String(password)) {
+      return { usuario: u, nombre: data[i][2] || u, rol: data[i][3] || 'profesor', email: data[i][4] || '' };
+    }
+  }
+  return null;
+}
+
+const ACTION_PERMISSIONS = {
+  add: 'items.write',
+  update: 'items.write',
+  delete: 'items.delete',
+  bulkImport: 'import.write',
+  restoreBackup: 'import.write',
+  profAdd: 'profesores.manage',
+  profUpdate: 'profesores.manage',
+  profDelete: 'profesores.manage',
+  aulasSync: 'config.manage',
+  catsSync: 'config.manage',
+  ciclosSync: 'config.manage',
+  prestar: 'loans.write',
+  devolver: 'loans.write',
+  getDocs: 'docs.read',
+  uploadDoc: 'docs.write',
+  deleteDoc: 'docs.write',
+  updateProfile: 'profile.write',
+  changePassword: 'profile.write',
+  notificarPedido: 'orders.write',
+  getUsers: 'config.manage',
+  userAdd: 'config.manage',
+  userUpdate: 'config.manage',
+  userDelete: 'config.manage',
+  userResetPassword: 'config.manage',
+  userAssignModulos: 'config.manage'
+};
+
+const ROLE_PERMISSIONS = {
+  'jefe departamento': ['*'],
+  'jefe de departamento': ['*'],
+  'administrador': ['*'],
+  'admin': ['*'],
+  'profesor': ['items.write','docs.write','loans.write','orders.write','profile.write'],
+  'consulta': ['profile.write'],
+  'lector': ['profile.write']
+};
+
+function normalizarRol(rol) {
+  return String(rol || 'consulta').trim().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function userCan(user, permission) {
+  if (permission === 'docs.read') return true;
+  const perms = ROLE_PERMISSIONS[normalizarRol(user && user.rol)] || ROLE_PERMISSIONS.consulta;
+  return perms.indexOf('*') >= 0 || perms.indexOf(permission) >= 0;
+}
+
+function esJefeDepartamento(rol) {
+  const r = normalizarRol(rol);
+  return r === 'jefe departamento' || r === 'jefe de departamento';
+}
+
+function requireAction(user, action) {
+  const permission = ACTION_PERMISSIONS[action];
+  if (!permission) return null;
+  if (userCan(user, permission)) return null;
+  return json({ ok: false, error: 'No tienes permisos para realizar esta accion' });
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────
+function getLogSheet(ss) {
+  let sheet = ss.getSheetByName(SHEET_LOG);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_LOG);
+    sheet.appendRow(HEADERS_LOG);
+    sheet.getRange(1, 1, 1, HEADERS_LOG.length).setFontWeight('bold').setBackground('#e0e7ff');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function auditLog(ss, user, accion, itemId, resumen) {
+  try {
+    getLogSheet(ss).appendRow([
+      Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Europe/Madrid', 'yyyy-MM-dd HH:mm:ss'),
+      user && user.usuario || '',
+      user && user.nombre || '',
+      user && user.rol || '',
+      accion || '',
+      itemId != null ? itemId : '',
+      String(resumen || '').substring(0, 500)
+    ]);
+  } catch(e) {}
+}
+
+function rowsToObjects(sheet, headers) {
+  if (!sheet) return [];
+  ensureHeaders(sheet, headers);
+  const data = sheet.getDataRange().getValues();
+  const out = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0] && !row[1]) continue;
+    const obj = {};
+    headers.forEach((h, idx) => {
+      let v = row[idx];
+      if (h === 'qty' || h === 'min' || h === 'cantidad' || h === 'cantidadDevuelta' || h === 'itemId' || h === 'profesorId' || h === 'orden') {
+        v = (v === '' || v == null) ? 0 : (Number(v) || 0);
+      } else if (h === 'id') {
+        if (v === '' || v == null) {
+          v = '';
+        } else {
+          const n = Number(v);
+          v = isNaN(n) ? String(v) : n;
+        }
+      }
+      if (v instanceof Date) v = Utilities.formatDate(v, 'GMT', 'yyyy-MM-dd');
+      obj[h] = v == null ? '' : v;
+    });
+    out.push(obj);
+  }
+  return out;
+}
+
+function nextId(sheet) {
+  const data = sheet.getDataRange().getValues();
+  let maxId = 0;
+  for (let i = 1; i < data.length; i++) if (Number(data[i][0]) > maxId) maxId = Number(data[i][0]);
+  return maxId + 1;
+}
+
+function itemCodeFromId(id) {
+  const n = Number(id);
+  if (!isNaN(n) && n > 0) return 'IB-' + String(n).padStart(5, '0');
+  const raw = String(id || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return raw ? 'IB-' + raw.substring(0, 8) : '';
+}
+
+function ensureItemCode(item) {
+  if (item && !item.code && item.id) item.code = itemCodeFromId(item.id);
+  return item;
+}
+
+function findRowById(sheet, id) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(id)) return i + 1;
+  }
+  return -1;
+}
+
+function resetSheetData(sheet, headers, color) {
+  sheet.clear();
+  sheet.appendRow(headers);
+  sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground(color || '#e2e6f0');
+  sheet.setFrozenRows(1);
+}
+
+function appendRowsByHeaders(sheet, headers, rows) {
+  if (!rows || !rows.length) return;
+  const values = rows.map(row => headers.map(h => row && row[h] != null ? row[h] : ''));
+  sheet.getRange(sheet.getLastRow() + 1, 1, values.length, headers.length).setValues(values);
+}
+
+function invRowToObject(row) {
+  const obj = {};
+  HEADERS_INV.forEach((h, idx) => {
+    let v = row[idx];
+    if (v instanceof Date) v = Utilities.formatDate(v, 'GMT', 'yyyy-MM-dd');
+    obj[h] = v == null ? '' : v;
+  });
+  return obj;
+}
+
+function isMaintenanceMarkedGAS(item) {
+  return item && (item.mant === true || item.mant === 1 || String(item.mant || '').trim() === '1' || item.est === 'Avería');
+}
+
+function normTextGAS(v) {
+  return String(v || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function isMaintenanceResolvedGAS(status) {
+  const s = normTextGAS(status);
+  return s === 'resuelto' || s === 'reparado';
+}
+
+function moduleCodesEqual(a, b) {
+  const sa = String(a || '').trim();
+  const sb = String(b || '').trim();
+  if (!sa || !sb) return false;
+  const na = Number(sa), nb = Number(sb);
+  if (!isNaN(na) && !isNaN(nb)) return na === nb;
+  return sa === sb;
+}
+
+function getItemModuloCod(item) {
+  const mod = String(item && item.mod || '');
+  return mod.indexOf('__') >= 0 ? mod.split('__')[1] : mod;
+}
+
+function findModuloResponsable(ss, item) {
+  const modCod = getItemModuloCod(item);
+  if (!modCod) return { cod: '', moduloNombre: '', responsableNombre: '', responsableEmail: '' };
+  const out = { cod: modCod, moduloNombre: '', responsableNombre: '', responsableEmail: '' };
+  const modSheet = ss.getSheetByName(SHEET_MODULOS);
+  if (modSheet) {
+    const modRows = modSheet.getDataRange().getValues();
+    for (let i = 1; i < modRows.length; i++) {
+      if (moduleCodesEqual(modRows[i][0], modCod)) {
+        out.moduloNombre = String(modRows[i][1] || '').trim();
+        out.responsableNombre = String(modRows[i][2] || '').trim();
+        break;
+      }
+    }
+  }
+  if (out.responsableNombre) {
+    const usrSheet = ss.getSheetByName(SHEET_USUARIOS);
+    if (usrSheet) {
+      const usrRows = usrSheet.getDataRange().getValues();
+      for (let i = 1; i < usrRows.length; i++) {
+        if (String(usrRows[i][2] || '').trim() === out.responsableNombre) {
+          out.responsableEmail = String(usrRows[i][4] || '').trim();
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function prepareMaintenanceRequester(it, oldItem, user) {
+  const newMarked = isMaintenanceMarkedGAS(it);
+  const oldMarked = isMaintenanceMarkedGAS(oldItem);
+  const oldStatus = oldItem && oldItem.mantEstado || '';
+  const oldOpen = oldMarked && !isMaintenanceResolvedGAS(oldStatus);
+  if (!newMarked) {
+    it.mantSolicitante = '';
+    it.mantSolicitanteEmail = '';
+    return;
+  }
+  if (!oldOpen) {
+    it.mantSolicitante = user && user.nombre || user && user.usuario || '';
+    it.mantSolicitanteEmail = user && user.email || '';
+    return;
+  }
+  it.mantSolicitante = oldItem.mantSolicitante || user && user.nombre || user && user.usuario || '';
+  it.mantSolicitanteEmail = oldItem.mantSolicitanteEmail || user && user.email || '';
+}
+
+function notifyMaintenanceChange(ss, user, it, oldItem) {
+  try {
+    const newMarked = isMaintenanceMarkedGAS(it);
+    if (!newMarked) return;
+    const oldMarked = isMaintenanceMarkedGAS(oldItem);
+    const oldStatusRaw = oldItem && oldItem.mantEstado || '';
+    const newStatusRaw = it.mantEstado || 'Pendiente';
+    const oldStatus = normTextGAS(oldStatusRaw);
+    const newStatus = normTextGAS(newStatusRaw || 'Pendiente');
+    const oldOpen = oldMarked && !isMaintenanceResolvedGAS(oldStatusRaw);
+    const statusTarget = newStatus === 'en reparacion' || newStatus === 'resuelto' || newStatus === 'reparado';
+    let kind = '';
+    if (!oldOpen && !statusTarget) kind = 'solicitud';
+    else if (oldStatus !== newStatus && statusTarget) kind = 'estado';
+    else return;
+
+    const modInfo = findModuloResponsable(ss, it);
+    const solicitanteNombre = it.mantSolicitante || user && user.nombre || user && user.usuario || '';
+    const solicitanteEmail = it.mantSolicitanteEmail || user && user.email || '';
+    const toEmail = modInfo.responsableEmail || solicitanteEmail;
+    if (!toEmail) return;
+    const cc = [];
+    if (solicitanteEmail && solicitanteEmail !== toEmail) cc.push(solicitanteEmail);
+
+    const itemTitle = `${it.ref ? it.ref + ' · ' : ''}${it.item || 'Material'}`;
+    const estadoLabel = newStatusRaw || 'Pendiente';
+    const subject = kind === 'solicitud'
+      ? `Solicitud de mantenimiento — ${it.item || 'material'}`
+      : `Mantenimiento ${estadoLabel} — ${it.item || 'material'}`;
+    const intro = kind === 'solicitud'
+      ? 'Se ha solicitado mantenimiento o reparación para este material.'
+      : `El mantenimiento de este material ha pasado al estado <strong>${estadoLabel}</strong>.`;
+
+    const mailOpts = {
+      to: toEmail,
+      subject,
+      htmlBody: `<div style="font-family:sans-serif;max-width:560px;padding:24px;color:#1a1d2e">
+        <h2 style="color:#d97706;margin-bottom:16px">Mantenimiento de material</h2>
+        <p>${intro}</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+          <tr><td style="padding:7px 12px;color:#6b7280">Material:</td><td style="padding:7px 12px;font-weight:700">${itemTitle}</td></tr>
+          <tr style="background:#f8fafc"><td style="padding:7px 12px;color:#6b7280">Módulo:</td><td style="padding:7px 12px">${modInfo.moduloNombre || it.mod || '—'}</td></tr>
+          <tr><td style="padding:7px 12px;color:#6b7280">Solicitado por:</td><td style="padding:7px 12px">${solicitanteNombre || '—'}</td></tr>
+          <tr style="background:#f8fafc"><td style="padding:7px 12px;color:#6b7280">Estado:</td><td style="padding:7px 12px;font-weight:700">${estadoLabel}</td></tr>
+          <tr><td style="padding:7px 12px;color:#6b7280">Fecha aviso:</td><td style="padding:7px 12px">${it.mantFecha || '—'}</td></tr>
+          <tr style="background:#f8fafc"><td style="padding:7px 12px;color:#6b7280">Responsable módulo:</td><td style="padding:7px 12px">${modInfo.responsableNombre || '—'}</td></tr>
+          <tr><td style="padding:7px 12px;color:#6b7280">Nota:</td><td style="padding:7px 12px">${it.mantNota || '—'}</td></tr>
+        </table>
+        <p style="color:#6b7280;font-size:12px">Inventario Taller FP — IES El Bosco</p>
+      </div>`
+    };
+    if (cc.length) mailOpts.cc = cc.join(',');
+    MailApp.sendEmail(mailOpts);
+  } catch(emailErr) {}
+}
+
+function notifyStockAlert(ss, it, oldItem, user) {
+  try {
+    const qty = Number(it.qty);
+    const min = Number(it.min);
+    if (!min || min <= 0) return;
+    if (qty > min) return;
+    const oldQty = Number(oldItem && oldItem.qty != null ? oldItem.qty : qty + 1);
+    if (oldQty <= min) return;
+
+    const modInfo = findModuloResponsable(ss, it);
+    if (!modInfo.responsableEmail) return;
+
+    const usrSheet = ss.getSheetByName(SHEET_USUARIOS);
+    const jefeEmails = [];
+    if (usrSheet) {
+      const rows = usrSheet.getDataRange().getValues();
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i][3] === 'Jefe Departamento' && rows[i][4]) jefeEmails.push(rows[i][4]);
+      }
+    }
+
+    const appUrl = 'https://inventariodepartamento.pages.dev/';
+    MailApp.sendEmail({
+      to: modInfo.responsableEmail,
+      cc: jefeEmails.join(','),
+      subject: `⚠️ Stock bajo — ${it.item || it.ref || 'Ítem #' + it.id}`,
+      htmlBody: `
+        <p>El siguiente ítem ha alcanzado el stock mínimo:</p>
+        <table style="border-collapse:collapse;margin:12px 0">
+          <tr><td style="padding:4px 12px 4px 0;font-weight:bold">Ítem:</td><td>${it.item || ''}</td></tr>
+          <tr><td style="padding:4px 12px 4px 0;font-weight:bold">Referencia:</td><td>${it.ref || '—'}</td></tr>
+          <tr><td style="padding:4px 12px 4px 0;font-weight:bold">Cantidad actual:</td><td><strong>${qty}</strong></td></tr>
+          <tr><td style="padding:4px 12px 4px 0;font-weight:bold">Mínimo:</td><td>${min}</td></tr>
+          <tr><td style="padding:4px 12px 4px 0;font-weight:bold">Módulo:</td><td>${modInfo.moduloNombre || '—'}</td></tr>
+          <tr><td style="padding:4px 12px 4px 0;font-weight:bold">Registrado por:</td><td>${user && user.nombre || user && user.usuario || '—'}</td></tr>
+        </table>
+        <p><a href="${appUrl}">Abrir inventario</a></p>
+      `
+    });
+    auditLog(ss, user, 'stockAlert', it.id, `Stock bajo: ${it.item || ''} → ${qty}/${min}`);
+  } catch(emailErr) {}
+}
+
+// ─── GET ─────────────────────────────────────────────────────────
+function doGet(e) {
+  try {
+    const u = e.parameter.u || '';
+    const p = e.parameter.p || '';
+    const action = e.parameter.action || 'list';
+
+    if (action === 'login') {
+      const user = verificarLogin(u, p);
+      if (!user) return json({ ok: false, error: 'Credenciales incorrectas' });
+      return json({ ok: true, user });
+    }
+
+    if (action === 'requestReset') {
+      const usuario = e.parameter.usuario || '';
+      if (!usuario) return json({ ok: false, error: 'Introduce un usuario' });
+      const ss2 = SpreadsheetApp.getActiveSpreadsheet();
+      const sheet2 = ss2.getSheetByName(SHEET_USUARIOS);
+      if (!sheet2) return json({ ok: false, error: 'Error interno. Contacta con el administrador.' });
+      const rows2 = sheet2.getDataRange().getValues();
+      let userEmail = '', userName = '', userFound = false;
+      for (let i = 1; i < rows2.length; i++) {
+        if (String(rows2[i][0]).trim().toLowerCase() === String(usuario).trim().toLowerCase()) {
+          userFound = true;
+          userEmail = String(rows2[i][4] || '').trim();
+          userName  = String(rows2[i][2] || usuario).trim();
+          break;
+        }
+      }
+      if (!userFound) return json({ ok: false, error: 'Usuario no encontrado.' });
+      if (!userEmail) return json({ ok: false, error: 'Este usuario no tiene correo asociado. Contacta con el administrador.' });
+      const token   = Utilities.getUuid();
+      const expires = Date.now() + 3600000;
+      PropertiesService.getScriptProperties().setProperty('reset_' + token, JSON.stringify({ usuario: String(usuario).trim(), expires }));
+      const appUrl    = decodeURIComponent(e.parameter.appUrl || '');
+      const resetLink = appUrl + '#reset/' + token;
+      MailApp.sendEmail({
+        to: userEmail,
+        subject: 'Recuperación de contraseña — Inventario Taller FP',
+        htmlBody: `<div style="font-family:sans-serif;max-width:500px;padding:24px;color:#1a1d2e">
+          <h2 style="color:#2563eb;margin-bottom:16px">🔑 Recuperar contraseña</h2>
+          <p>Hola <strong>${userName}</strong>,</p>
+          <p>Has solicitado recuperar tu contraseña del <strong>Inventario Taller FP — IES El Bosco</strong>.</p>
+          <p style="margin:24px 0"><a href="${resetLink}" style="background:#2563eb;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Cambiar mi contraseña</a></p>
+          <p style="color:#6b7280;font-size:13px">Enlace válido durante <strong>1 hora</strong>. Si no has solicitado este cambio, ignora este mensaje.</p>
+        </div>`
+      });
+      return json({ ok: true });
+    }
+
+    const user = verificarLogin(u, p);
+    if (!user) return json({ ok: false, error: 'No autorizado' });
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const permError = requireAction(user, action);
+    if (permError) return permError;
+    const items      = rowsToObjects(ss.getSheetByName(SHEET_INVENTARIO), HEADERS_INV);
+    const profesores = rowsToObjects(ss.getSheetByName(SHEET_PROFESORES), HEADERS_PROF)
+      .filter(p => String(p.nombre || '').trim() !== '' && String(p.nombre || '').trim().toLowerCase() !== 'departamento');
+    const prestamos  = rowsToObjects(ss.getSheetByName(SHEET_PRESTAMOS), HEADERS_PRES);
+    let aulas        = rowsToObjects(ss.getSheetByName(SHEET_AULAS), HEADERS_AULAS);
+    let cats         = rowsToObjects(ss.getSheetByName(SHEET_CATS), HEADERS_CATS);
+    let ciclosRows   = rowsToObjects(ss.getSheetByName(SHEET_CICLOS), HEADERS_CICLOS);
+
+    // Si no hay aulas configuradas, devolver las por defecto
+    if (!aulas.length) {
+      aulas = AULAS_DEFAULT.map(a => ({id:a[0],name:a[1],icon:a[2],desc:a[3],th:a[4],orden:a[5]}));
+    }
+    aulas.sort((a,b)=>(Number(a.orden)||0)-(Number(b.orden)||0));
+
+    // Si no hay categorías configuradas, devolver las por defecto
+    if (!cats.length) {
+      cats = CATS_DEFAULT.map(c => ({name:c[0],c:c[1],bg:c[2],i:c[3],orden:c[4]}));
+    }
+    cats.sort((a,b)=>(Number(a.orden)||0)-(Number(b.orden)||0));
+
+    // Reconstruir ciclos desde filas planas (agrupadas por cicloId)
+    let ciclos = [];
+    if (ciclosRows.length) {
+      ciclosRows.sort((a,b)=>(Number(a.cicloOrden)||0)-(Number(b.cicloOrden)||0)||(Number(a.modOrden)||0)-(Number(b.modOrden)||0));
+      const cicloMap = {};
+      const cicloOrder = [];
+      ciclosRows.forEach(r => {
+        if (!cicloMap[r.cicloId]) {
+          cicloMap[r.cicloId] = {id:r.cicloId,name:r.cicloNombre,nivel:r.nivel,icon:r.icon,th:r.th,desc:r.desc,modulos:[]};
+          cicloOrder.push(r.cicloId);
+        }
+        if (r.modCod) cicloMap[r.cicloId].modulos.push({cod:String(r.modCod),name:r.modNombre,horas:Number(r.modHoras)||0});
+      });
+      ciclos = cicloOrder.map(id => cicloMap[id]);
+    }
+
+    if (action === 'getItemLog') {
+      try {
+        const itemId = e.parameter.itemId;
+        const logSheet = ss.getSheetByName(SHEET_LOG);
+        if (!logSheet) return json({ ok: true, logs: [] });
+        const rows = logSheet.getDataRange().getValues();
+        const logs = [];
+        for (let i = 1; i < rows.length; i++) {
+          const itemIdLog = String(rows[i][5] || '').trim();
+          const itemIdReq = String(itemId || '').trim();
+          if (itemIdLog === itemIdReq) {
+            const fechaVal = rows[i][0];
+            let fechaStr = '';
+            if (fechaVal) {
+              try {
+                fechaStr = Utilities.formatDate(new Date(fechaVal), 'Europe/Madrid', 'dd/MM/yyyy HH:mm');
+              } catch(e) {
+                fechaStr = String(fechaVal);
+              }
+            }
+            logs.push({
+              fecha: fechaStr,
+              usuario: String(rows[i][2] || rows[i][1] || '—'),
+              accion: String(rows[i][4] || '—'),
+              resumen: String(rows[i][6] || '—')
+            });
+          }
+        }
+        logs.reverse();
+        return json({ ok: true, logs });
+      } catch(logErr) {
+        return json({ ok: false, error: logErr.toString() });
+      }
+    }
+
+    return json({ ok: true, items, profesores, prestamos, aulas, cats, ciclos, user });
+  } catch (err) {
+    return json({ ok: false, error: err.toString() });
+  }
+}
+
+// ─── POST ────────────────────────────────────────────────────────
+function doPost(e) {
+  try {
+    const body   = JSON.parse(e.postData.contents);
+    const action = body.action;
+
+    // ─── RESET CONTRASEÑA (sin autenticación) ───────────────────
+    if (action === 'resetPassword') {
+      const { token, newPassword } = body;
+      if (!token || !newPassword) return json({ ok: false, error: 'Faltan campos' });
+      if (String(newPassword).length < 4) return json({ ok: false, error: 'Contraseña demasiado corta' });
+      const props  = PropertiesService.getScriptProperties();
+      const stored = props.getProperty('reset_' + token);
+      if (!stored) return json({ ok: false, error: 'Enlace inválido o ya utilizado' });
+      let tData;
+      try { tData = JSON.parse(stored); } catch(ex) { return json({ ok: false, error: 'Token inválido' }); }
+      if (Date.now() > tData.expires) {
+        props.deleteProperty('reset_' + token);
+        return json({ ok: false, error: 'El enlace ha expirado. Solicita uno nuevo.' });
+      }
+      const ss0    = SpreadsheetApp.getActiveSpreadsheet();
+      const sheet0 = ss0.getSheetByName(SHEET_USUARIOS);
+      const rows0  = sheet0.getDataRange().getValues();
+      for (let i = 1; i < rows0.length; i++) {
+        if (String(rows0[i][0]).trim() === String(tData.usuario).trim()) {
+          sheet0.getRange(i + 1, 2).setValue(newPassword);
+          props.deleteProperty('reset_' + token);
+          return json({ ok: true });
+        }
+      }
+      return json({ ok: false, error: 'Usuario no encontrado' });
+    }
+
+    const user = verificarLogin(body.u, body.p);
+    if (!user) return json({ ok: false, error: 'No autorizado' });
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // ─── ITEMS ──────────────────────────────────────────────────
+    const permError = requireAction(user, action);
+    if (permError) return permError;
+
+    if (action === 'add') {
+      const sheet = ss.getSheetByName(SHEET_INVENTARIO);
+      ensureHeaders(sheet, HEADERS_INV);
+      const it = body.item;
+      it.id = nextId(sheet);
+      ensureItemCode(it);
+      prepareMaintenanceRequester(it, {}, user);
+      sheet.appendRow(HEADERS_INV.map(h => it[h] != null ? it[h] : ''));
+      auditLog(ss, user, 'add', it.id, `Añadido item: ${it.item || ''} (${it.ref || 'sin ref'})`);
+      notifyMaintenanceChange(ss, user, it, {});
+      notifyStockAlert(ss, it, {}, user);
+      return json({ ok: true, item: it });
+    }
+    if (action === 'update') {
+      const sheet = ss.getSheetByName(SHEET_INVENTARIO);
+      ensureHeaders(sheet, HEADERS_INV);
+      const it = body.item;
+      ensureItemCode(it);
+      const r = findRowById(sheet, it.id);
+      if (r < 0) return json({ ok: false, error: 'No encontrado' });
+      const old = sheet.getRange(r, 1, 1, HEADERS_INV.length).getValues()[0];
+      const oldItem = invRowToObject(old);
+      prepareMaintenanceRequester(it, oldItem, user);
+      sheet.getRange(r, 1, 1, HEADERS_INV.length).setValues([HEADERS_INV.map(h => it[h] != null ? it[h] : '')]);
+      auditLog(ss, user, 'update', it.id, `Actualizado item: ${it.item || old[4] || ''}; qty ${old[5]} -> ${it.qty}; estado ${old[9]} -> ${it.est}`);
+      notifyMaintenanceChange(ss, user, it, oldItem);
+      notifyStockAlert(ss, it, oldItem, user);
+      return json({ ok: true, item: it });
+    }
+    if (action === 'delete') {
+      const sheet = ss.getSheetByName(SHEET_INVENTARIO);
+      ensureHeaders(sheet, HEADERS_INV);
+      const r = findRowById(sheet, body.id);
+      if (r < 0) return json({ ok: false, error: 'No encontrado' });
+      const old = sheet.getRange(r, 1, 1, HEADERS_INV.length).getValues()[0];
+      sheet.deleteRow(r);
+      auditLog(ss, user, 'delete', body.id, `Eliminado item: ${old[4] || ''} (${old[1] || 'sin ref'})`);
+      return json({ ok: true });
+    }
+    
+    // ─── IMPORTACIÓN MASIVA ─────────────────────────────────────
+    if (action === 'bulkImport') {
+      const sheet = ss.getSheetByName(SHEET_INVENTARIO);
+      ensureHeaders(sheet, HEADERS_INV);
+      const newItems = body.items || [];
+      if (!newItems.length) return json({ ok: false, error: 'Sin ítems para importar' });
+      
+      // Calcular siguiente id
+      const data = sheet.getDataRange().getValues();
+      let maxId = 0;
+      for (let i = 1; i < data.length; i++) if (Number(data[i][0]) > maxId) maxId = Number(data[i][0]);
+      
+      // Preparar todas las filas
+      const rows = newItems.map(it => {
+        it.id = ++maxId;
+        ensureItemCode(it);
+        return HEADERS_INV.map(h => it[h] != null ? it[h] : '');
+      });
+      
+      // Inserción en bloque (mucho más rápido que appendRow uno a uno)
+      const startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, rows.length, HEADERS_INV.length).setValues(rows);
+      auditLog(ss, user, 'bulkImport', '', `Importados ${rows.length} items`);
+      
+      return json({ ok: true, imported: rows.length, items: newItems });
+    }
+
+    // ─── PROFESORES ─────────────────────────────────────────────
+    if (action === 'restoreBackup') {
+      const backup = body.backup || {};
+      const sections = body.sections || {};
+      const restored = {};
+
+      if (sections.inventario) {
+        const sheet = ss.getSheetByName(SHEET_INVENTARIO) || ss.insertSheet(SHEET_INVENTARIO);
+        const inv = Array.isArray(backup.inventario) ? backup.inventario : [];
+        let next = 1;
+        inv.forEach(it => { if (Number(it.id) >= next) next = Number(it.id) + 1; });
+        inv.forEach(it => { if (!it.id) it.id = next++; });
+        inv.forEach(ensureItemCode);
+        resetSheetData(sheet, HEADERS_INV, '#e2e6f0');
+        appendRowsByHeaders(sheet, HEADERS_INV, inv);
+        restored.inventario = inv.length;
+      }
+
+      if (sections.aulas) {
+        const sheet = ss.getSheetByName(SHEET_AULAS) || ss.insertSheet(SHEET_AULAS);
+        const aulas = Array.isArray(backup.aulas) ? backup.aulas : [];
+        resetSheetData(sheet, HEADERS_AULAS, '#cffafe');
+        appendRowsByHeaders(sheet, HEADERS_AULAS, aulas.map((a, i) => ({
+          id: a.id, name: a.name, icon: a.icon, desc: a.desc, th: a.th, orden: a.orden || i + 1
+        })));
+        restored.aulas = aulas.length;
+      }
+
+      if (sections.categorias) {
+        const sheet = ss.getSheetByName(SHEET_CATS) || ss.insertSheet(SHEET_CATS);
+        const rawCats = backup.categorias || backup.cats || [];
+        const cats = Array.isArray(rawCats)
+          ? rawCats
+          : Object.keys(rawCats).map((name, i) => ({ name, c: rawCats[name].c, bg: rawCats[name].bg, i: rawCats[name].i, orden: i + 1 }));
+        resetSheetData(sheet, HEADERS_CATS, '#fef9c3');
+        appendRowsByHeaders(sheet, HEADERS_CATS, cats.map((c, i) => ({
+          name: c.name, c: c.c, bg: c.bg, i: c.i, orden: c.orden || i + 1
+        })));
+        restored.categorias = cats.length;
+      }
+
+      if (sections.ciclos) {
+        const sheet = ss.getSheetByName(SHEET_CICLOS) || ss.insertSheet(SHEET_CICLOS);
+        const ciclos = Array.isArray(backup.ciclos) ? backup.ciclos : [];
+        const rows = [];
+        ciclos.forEach((c, ci) => {
+          (c.modulos || []).forEach((m, mi) => rows.push({
+            cicloId: c.id, cicloNombre: c.name, nivel: c.nivel, icon: c.icon, th: c.th, desc: c.desc,
+            modCod: String(m.cod || ''), modNombre: m.name, modHoras: Number(m.horas) || 0,
+            cicloOrden: ci + 1, modOrden: mi + 1
+          }));
+        });
+        resetSheetData(sheet, HEADERS_CICLOS, '#d1fae5');
+        appendRowsByHeaders(sheet, HEADERS_CICLOS, rows);
+        restored.ciclos = ciclos.length;
+      }
+
+      if (sections.profesores) {
+        const sheet = ss.getSheetByName(SHEET_PROFESORES) || ss.insertSheet(SHEET_PROFESORES);
+        const profs = Array.isArray(backup.profesores) ? backup.profesores : [];
+        let next = 1;
+        profs.forEach(p => { if (Number(p.id) >= next) next = Number(p.id) + 1; });
+        profs.forEach(p => { if (!p.id) p.id = next++; });
+        resetSheetData(sheet, HEADERS_PROF, '#dcfce7');
+        appendRowsByHeaders(sheet, HEADERS_PROF, profs);
+        restored.profesores = profs.length;
+      }
+
+      auditLog(ss, user, 'restoreBackup', '', `Backup restaurado: ${Object.keys(restored).map(k => k + '=' + restored[k]).join(', ')}`);
+      return json({ ok: true, restored });
+    }
+
+    // ─── USUARIOS (gestión de cuentas) ──────────────────────────
+    if (action === 'getUsers') {
+      const sheet = ss.getSheetByName(SHEET_USUARIOS);
+      const data = sheet.getDataRange().getValues();
+      const usuarios = [];
+      // Fila 2 (índice 1) es el usuario genérico Departamento — siempre se salta
+      for (let i = 2; i < data.length; i++) {
+        const login = String(data[i][0] || '').trim();
+        if (!login) continue;
+        usuarios.push({ usuario: login, nombre: data[i][2], rol: data[i][3], email: data[i][4] });
+      }
+      // Incluir módulos asignados a cada usuario (col C de hoja Modulos)
+      const modSheet = ss.getSheetByName(SHEET_MODULOS);
+      if (modSheet) {
+        const modRows = modSheet.getDataRange().getValues();
+        // Para cada usuario, recopilar los cods de módulos donde col C coincide con su nombre
+        usuarios.forEach(u => {
+          u.modulos = [];
+          for (let i = 1; i < modRows.length; i++) {
+            const resp = String(modRows[i][2] || '').trim();
+            if (resp.toLowerCase() === String(u.nombre || '').trim().toLowerCase()) {
+              u.modulos.push(String(modRows[i][0]).trim());
+            }
+          }
+        });
+      }
+      // Devolver todos los módulos disponibles para los checkboxes del frontend
+      const modSheetAll = ss.getSheetByName(SHEET_MODULOS);
+      const todosModulos = [];
+      if (modSheetAll) {
+        const allRows = modSheetAll.getDataRange().getValues();
+        for (let i = 1; i < allRows.length; i++) {
+          const cod = String(allRows[i][0] || '').trim();
+          if (cod) todosModulos.push({ cod, nombre: String(allRows[i][1] || '').trim(), responsable: String(allRows[i][2] || '').trim() });
+        }
+      }
+      return json({ ok: true, usuarios, todosModulos });
+    }
+
+    if (action === 'userAssignModulos') {
+      requireAction(user, 'config.manage');
+      const nombreUsuario = String(body.nombre || '').trim();
+      const modsCods = Array.isArray(body.modulos) ? body.modulos.map(c => String(c).trim()) : [];
+      const modSheet = ss.getSheetByName(SHEET_MODULOS);
+      if (!modSheet) return json({ ok: false, error: 'Hoja Modulos no encontrada' });
+      const modRows = modSheet.getDataRange().getValues();
+      // Recorrer todas las filas de módulos y actualizar col C
+      for (let i = 1; i < modRows.length; i++) {
+        const cod = String(modRows[i][0] || '').trim();
+        if (!cod) continue;
+        const respActual = String(modRows[i][2] || '').trim();
+        const estaAsignado = modsCods.includes(cod);
+        const eraMio = respActual.toLowerCase() === nombreUsuario.toLowerCase();
+        if (estaAsignado && !eraMio) {
+          // Asignar este módulo al usuario
+          modSheet.getRange(i + 1, 3).setValue(nombreUsuario);
+        } else if (!estaAsignado && eraMio) {
+          // Quitar la asignación (dejar vacío)
+          modSheet.getRange(i + 1, 3).setValue('');
+        }
+      }
+      auditLog(ss, user, 'userAssignModulos', '', `Módulos asignados a ${nombreUsuario}: ${modsCods.join(', ') || 'ninguno'}`);
+      return json({ ok: true });
+    }
+
+    if (action === 'userAdd') {
+      const sheet = ss.getSheetByName(SHEET_USUARIOS);
+      const u = body.usuario;
+      if (!u.usuario || !u.nombre || !u.rol) return json({ ok: false, error: 'Faltan campos obligatorios' });
+      const data = sheet.getDataRange().getValues();
+      // Verificar que el usuario no existe ya (desde fila 2, saltando el genérico)
+      for (let i = 2; i < data.length; i++) {
+        if (String(data[i][0]).trim().toLowerCase() === String(u.usuario).trim().toLowerCase())
+          return json({ ok: false, error: 'Ya existe un usuario con ese nombre de usuario' });
+      }
+      // appendRow normal — el genérico Departamento está fijo en fila 2
+      sheet.appendRow([u.usuario.trim(), u.password || 'cambiar123', u.nombre.trim(), u.rol.trim(), u.email || '']);
+      auditLog(ss, user, 'userAdd', '', `Nuevo usuario: ${u.usuario} (${u.rol})`);
+      return json({ ok: true });
+    }
+
+    if (action === 'userUpdate') {
+      const sheet = ss.getSheetByName(SHEET_USUARIOS);
+      const u = body.usuario;
+      if (!u.usuario || !u.nombre || !u.rol) return json({ ok: false, error: 'Faltan campos obligatorios' });
+      if (String(u.usuario).trim().toLowerCase() === String(user.usuario).trim().toLowerCase()
+          && !esJefeDepartamento(u.rol))
+        return json({ ok: false, error: 'No puedes cambiarte tu propio rol de Jefe' });
+      const data = sheet.getDataRange().getValues();
+      // Empieza en i=2 para proteger la fila 2 (genérico Departamento)
+      for (let i = 2; i < data.length; i++) {
+        if (String(data[i][0]).trim().toLowerCase() === String(u.usuario).trim().toLowerCase()) {
+          sheet.getRange(i + 1, 3).setValue(u.nombre.trim());
+          sheet.getRange(i + 1, 4).setValue(u.rol.trim());
+          sheet.getRange(i + 1, 5).setValue(u.email || '');
+          auditLog(ss, user, 'userUpdate', '', `Usuario actualizado: ${u.usuario} (${u.rol})`);
+          return json({ ok: true });
+        }
+      }
+      return json({ ok: false, error: 'Usuario no encontrado' });
+    }
+
+    if (action === 'userDelete') {
+      const sheet = ss.getSheetByName(SHEET_USUARIOS);
+      const uname = String(body.usuario || '').trim().toLowerCase();
+      if (uname === String(user.usuario).trim().toLowerCase())
+        return json({ ok: false, error: 'No puedes eliminar tu propia cuenta' });
+      const data = sheet.getDataRange().getValues();
+      // Empieza en i=2 para proteger la fila 2 (genérico Departamento)
+      for (let i = 2; i < data.length; i++) {
+        if (String(data[i][0]).trim().toLowerCase() === uname) {
+          auditLog(ss, user, 'userDelete', '', `Usuario eliminado: ${data[i][0]}`);
+          sheet.deleteRow(i + 1);
+          return json({ ok: true });
+        }
+      }
+      return json({ ok: false, error: 'Usuario no encontrado' });
+    }
+
+    if (action === 'userResetPassword') {
+      const sheet = ss.getSheetByName(SHEET_USUARIOS);
+      const uname = String(body.usuario || '').trim().toLowerCase();
+      const newPass = String(body.password || 'cambiar123').trim();
+      const data = sheet.getDataRange().getValues();
+      // Empieza en i=2 para proteger la fila 2 (genérico Departamento)
+      for (let i = 2; i < data.length; i++) {
+        if (String(data[i][0]).trim().toLowerCase() === uname) {
+          sheet.getRange(i + 1, 2).setValue(newPass);
+          auditLog(ss, user, 'userResetPassword', '', `Contraseña reseteada para: ${data[i][0]}`);
+          return json({ ok: true });
+        }
+      }
+      return json({ ok: false, error: 'Usuario no encontrado' });
+    }
+
+    if (action === 'profAdd') {
+      const sheet = ss.getSheetByName(SHEET_PROFESORES);
+      const pr = body.profesor;
+      pr.id = nextId(sheet);
+      sheet.appendRow(HEADERS_PROF.map(h => pr[h] != null ? pr[h] : ''));
+      auditLog(ss, user, 'profAdd', pr.id, `Añadido profesor: ${pr.nombre || ''}`);
+      return json({ ok: true, profesor: pr });
+    }
+    if (action === 'profUpdate') {
+      const sheet = ss.getSheetByName(SHEET_PROFESORES);
+      const pr = body.profesor;
+      const r = findRowById(sheet, pr.id);
+      if (r < 0) return json({ ok: false, error: 'No encontrado' });
+      sheet.getRange(r, 1, 1, HEADERS_PROF.length).setValues([HEADERS_PROF.map(h => pr[h] != null ? pr[h] : '')]);
+      auditLog(ss, user, 'profUpdate', pr.id, `Actualizado profesor: ${pr.nombre || ''}`);
+      return json({ ok: true, profesor: pr });
+    }
+    if (action === 'profDelete') {
+      const sheet = ss.getSheetByName(SHEET_PROFESORES);
+      const r = findRowById(sheet, body.id);
+      if (r < 0) return json({ ok: false, error: 'No encontrado' });
+      const old = sheet.getRange(r, 1, 1, HEADERS_PROF.length).getValues()[0];
+      sheet.deleteRow(r);
+      auditLog(ss, user, 'profDelete', body.id, `Eliminado profesor: ${old[1] || ''}`);
+      return json({ ok: true });
+    }
+
+    // ─── AULAS (sync completo) ──────────────────────────────────
+    if (action === 'aulasSync') {
+      const sheet = ss.getSheetByName(SHEET_AULAS) || ss.insertSheet(SHEET_AULAS);
+      const aulas = body.aulas || [];
+      // Borrar todo y reescribir
+      sheet.clear();
+      sheet.appendRow(HEADERS_AULAS);
+      sheet.getRange(1, 1, 1, HEADERS_AULAS.length).setFontWeight('bold').setBackground('#cffafe');
+      sheet.setFrozenRows(1);
+      aulas.forEach((a, i) => {
+        sheet.appendRow([a.id, a.name, a.icon, a.desc, a.th, i+1]);
+      });
+      auditLog(ss, user, 'aulasSync', '', `Sincronizadas ${aulas.length} aulas`);
+      return json({ ok: true, aulas });
+    }
+
+    // ─── CATEGORÍAS (sync completo) ─────────────────────────────
+    if (action === 'catsSync') {
+      const sheet = ss.getSheetByName(SHEET_CATS) || ss.insertSheet(SHEET_CATS);
+      const cats = body.cats || [];
+      sheet.clear();
+      sheet.appendRow(HEADERS_CATS);
+      sheet.getRange(1, 1, 1, HEADERS_CATS.length).setFontWeight('bold').setBackground('#fef9c3');
+      sheet.setFrozenRows(1);
+      cats.forEach(c => {
+        sheet.appendRow([c.name, c.c, c.bg, c.i, c.orden]);
+      });
+      auditLog(ss, user, 'catsSync', '', `Sincronizadas ${cats.length} categorias`);
+      return json({ ok: true, cats });
+    }
+
+    // ─── CICLOS Y MÓDULOS (sync completo) ──────────────────────
+    if (action === 'ciclosSync') {
+      const sheet = ss.getSheetByName(SHEET_CICLOS) || ss.insertSheet(SHEET_CICLOS);
+      const ciclos = body.ciclos || [];
+      sheet.clear();
+      sheet.appendRow(HEADERS_CICLOS);
+      sheet.getRange(1, 1, 1, HEADERS_CICLOS.length).setFontWeight('bold').setBackground('#d1fae5');
+      sheet.setFrozenRows(1);
+      ciclos.forEach((c, ci) => {
+        c.modulos.forEach((m, mi) => {
+          sheet.appendRow([c.id, c.name, c.nivel, c.icon, c.th, c.desc, String(m.cod), m.name, Number(m.horas)||0, ci+1, mi+1]);
+        });
+      });
+      auditLog(ss, user, 'ciclosSync', '', `Sincronizados ${ciclos.length} ciclos`);
+      return json({ ok: true, ciclos });
+    }
+
+    // ─── PRESTAMOS ──────────────────────────────────────────────
+    if (action === 'prestar') {
+      const invSheet = ss.getSheetByName(SHEET_INVENTARIO);
+      const presSheet = ss.getSheetByName(SHEET_PRESTAMOS);
+      const pres = body.prestamo;
+
+      const r = findRowById(invSheet, pres.itemId);
+      if (r < 0) return json({ ok: false, error: 'Ítem no encontrado' });
+      const itemRow = invSheet.getRange(r, 1, 1, HEADERS_INV.length).getValues()[0];
+      const stockActual = Number(itemRow[5]) || 0;
+      const cant = Number(pres.cantidad) || 0;
+      if (cant <= 0) return json({ ok: false, error: 'Cantidad inválida' });
+      if (cant > stockActual) return json({ ok: false, error: `Stock insuficiente (disponible: ${stockActual})` });
+
+      invSheet.getRange(r, 6).setValue(stockActual - cant);
+
+      pres.id = nextId(presSheet);
+      pres.gestionadoPor = user.nombre;
+      pres.fechaPrestamo = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
+      pres.fechaDevolucion = '';
+      pres.cantidadDevuelta = 0;
+      pres.estado = 'Activo';
+      presSheet.appendRow(HEADERS_PRES.map(h => pres[h] != null ? pres[h] : ''));
+      auditLog(ss, user, 'prestar', pres.itemId, `Prestamo ${pres.id}: ${pres.cantidad} ud. de ${pres.itemNombre || ''} a ${pres.profesorNombre || ''}`);
+
+      // ── Notificación email al responsable del módulo ────────────
+      if (pres.moduloCod) {
+        try {
+          const modSheet = ss.getSheetByName(SHEET_MODULOS);
+          if (modSheet) {
+            const modRows = modSheet.getDataRange().getValues();
+            let responsableNombre = '';
+            for (let i = 1; i < modRows.length; i++) {
+              if (Number(modRows[i][0]) === Number(pres.moduloCod)) {
+                responsableNombre = String(modRows[i][2] || '').trim();
+                break;
+              }
+            }
+            if (responsableNombre) {
+              const usrSheet = ss.getSheetByName(SHEET_USUARIOS);
+              const usrRows = usrSheet.getDataRange().getValues();
+              let responsableEmail = '';
+              for (let i = 1; i < usrRows.length; i++) {
+                if (String(usrRows[i][2] || '').trim() === responsableNombre) {
+                  responsableEmail = String(usrRows[i][4] || '').trim();
+                  break;
+                }
+              }
+              if (responsableEmail) {
+                const jefeEmails1 = [];
+                for (let i = 1; i < usrRows.length; i++) {
+                  if (esJefeDepartamento(usrRows[i][3])) {
+                    const e = String(usrRows[i][4] || '').trim();
+                    if (e) jefeEmails1.push(e);
+                  }
+                }
+                const qty = Number(pres.cantidad);
+                const mailOpts = {
+                  to: responsableEmail,
+                  subject: `Préstamo de material — ${pres.itemNombre}`,
+                  htmlBody: `<div style="font-family:sans-serif;max-width:500px;padding:24px;color:#1a1d2e">
+                    <h2 style="color:#2563eb;margin-bottom:16px">📦 Préstamo de material</h2>
+                    <p>Hola <strong>${responsableNombre}</strong>,</p>
+                    <p>Se ha registrado un préstamo de material del módulo <strong>${pres.moduloNombre}</strong>:</p>
+                    <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+                      <tr><td style="padding:6px 12px;color:#6b7280">Material:</td><td style="padding:6px 12px;font-weight:700">${pres.itemNombre}</td></tr>
+                      <tr style="background:#f8fafc"><td style="padding:6px 12px;color:#6b7280">Cantidad:</td><td style="padding:6px 12px">${qty} unidad${qty!==1?'es':''}</td></tr>
+                      <tr><td style="padding:6px 12px;color:#6b7280">Prestado a:</td><td style="padding:6px 12px">${pres.profesorNombre}</td></tr>
+                      <tr style="background:#f8fafc"><td style="padding:6px 12px;color:#6b7280">Devolución prevista:</td><td style="padding:6px 12px">${pres.fechaPrevista||'—'}</td></tr>
+                    </table>
+                    <p style="color:#6b7280;font-size:12px">Inventario Taller FP — IES El Bosco</p>
+                  </div>`
+                };
+                const jefeCcs1 = jefeEmails1.filter(e => e !== responsableEmail);
+                if (jefeCcs1.length) mailOpts.cc = jefeCcs1.join(',');
+                MailApp.sendEmail(mailOpts);
+              }
+            }
+          }
+        } catch(emailErr) {}
+      }
+
+      return json({ ok: true, prestamo: pres });
+    }
+
+    if (action === 'devolver') {
+      const invSheet = ss.getSheetByName(SHEET_INVENTARIO);
+      const presSheet = ss.getSheetByName(SHEET_PRESTAMOS);
+      const presId = body.id;
+      const cantDev = Number(body.cantidadDevuelta) || 0;
+
+      const rPres = findRowById(presSheet, presId);
+      if (rPres < 0) return json({ ok: false, error: 'Préstamo no encontrado' });
+      const presRow = presSheet.getRange(rPres, 1, 1, HEADERS_PRES.length).getValues()[0];
+      const cantPrestada = Number(presRow[3]) || 0;
+      const yaDevuelta = Number(presRow[12]) || 0;
+      const pendiente = cantPrestada - yaDevuelta;
+
+      if (cantDev <= 0 || cantDev > pendiente) {
+        return json({ ok: false, error: `Cantidad inválida (pendiente: ${pendiente})` });
+      }
+
+      const itemId = Number(presRow[1]);
+      const rInv = findRowById(invSheet, itemId);
+      if (rInv >= 0) {
+        const stockActual = Number(invSheet.getRange(rInv, 6).getValue()) || 0;
+        invSheet.getRange(rInv, 6).setValue(stockActual + cantDev);
+      }
+
+      const nuevaDevuelta = yaDevuelta + cantDev;
+      presSheet.getRange(rPres, 13).setValue(nuevaDevuelta);
+      const estadoFinal = nuevaDevuelta >= cantPrestada ? 'Devuelto' : 'Parcial';
+      if (nuevaDevuelta >= cantPrestada) {
+        presSheet.getRange(rPres, 12).setValue(Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd'));
+        presSheet.getRange(rPres, 14).setValue('Devuelto');
+      } else {
+        presSheet.getRange(rPres, 14).setValue('Parcial');
+      }
+      auditLog(ss, user, 'devolver', itemId, `Devolucion prestamo ${presId}: ${cantDev} ud.; estado ${estadoFinal}`);
+
+      // ── Notificación email devolución ───────────────────────────
+      try {
+        const itemNombre   = String(presRow[2] || '');
+        const profesorId   = Number(presRow[6]);
+        const profesorNombre = String(presRow[7] || '');
+        const fechaPrestamo  = presRow[9] || '—';
+
+        // Email del profesor que tomó prestado (hoja Profesores)
+        const profSheet = ss.getSheetByName(SHEET_PROFESORES);
+        let profesorEmail = '';
+        if (profSheet) {
+          const profRows = profSheet.getDataRange().getValues();
+          for (let i = 1; i < profRows.length; i++) {
+            if (Number(profRows[i][0]) === profesorId) {
+              profesorEmail = String(profRows[i][3] || '').trim();
+              break;
+            }
+          }
+        }
+
+        // Email del responsable del módulo (Inventario → Modulos → Usuarios)
+        let responsableNombre = '', responsableEmail = '';
+        const jefeEmails2 = [];
+        if (rInv >= 0) {
+          const invRowFull = invSheet.getRange(rInv, 1, 1, HEADERS_INV.length).getValues()[0];
+          const modField = String(invRowFull[3] || '');
+          const modCod = modField.includes('__') ? modField.split('__')[1] : '';
+          if (modCod) {
+            const modSheet = ss.getSheetByName(SHEET_MODULOS);
+            if (modSheet) {
+              const modRows = modSheet.getDataRange().getValues();
+              for (let i = 1; i < modRows.length; i++) {
+                if (Number(modRows[i][0]) === Number(modCod)) {
+                  responsableNombre = String(modRows[i][2] || '').trim();
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        // Emails de Usuarios (responsable + jefe)
+        const usrSheet = ss.getSheetByName(SHEET_USUARIOS);
+        if (usrSheet) {
+          const usrRows = usrSheet.getDataRange().getValues();
+          for (let i = 1; i < usrRows.length; i++) {
+            const nombre = String(usrRows[i][2] || '').trim();
+            const rol    = String(usrRows[i][3] || '').trim();
+            const email  = String(usrRows[i][4] || '').trim();
+            if (responsableNombre && nombre === responsableNombre) responsableEmail = email;
+            if (esJefeDepartamento(rol) && email) jefeEmails2.push(email);
+          }
+        }
+
+        // Construir destinatarios (sin duplicados)
+        const toSet = new Set([responsableEmail, profesorEmail].filter(e => e));
+        if (toSet.size > 0) {
+          const htmlBody = `<div style="font-family:sans-serif;max-width:500px;padding:24px;color:#1a1d2e">
+            <h2 style="color:#059669;margin-bottom:16px">📥 Devolución de material</h2>
+            <p>Se ha registrado una devolución de material:</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+              <tr><td style="padding:6px 12px;color:#6b7280">Material:</td><td style="padding:6px 12px;font-weight:700">${itemNombre}</td></tr>
+              <tr style="background:#f8fafc"><td style="padding:6px 12px;color:#6b7280">Devuelto por:</td><td style="padding:6px 12px">${profesorNombre}</td></tr>
+              <tr><td style="padding:6px 12px;color:#6b7280">Cantidad devuelta:</td><td style="padding:6px 12px">${cantDev} unidad${cantDev!==1?'es':''}</td></tr>
+              <tr style="background:#f8fafc"><td style="padding:6px 12px;color:#6b7280">Estado préstamo:</td><td style="padding:6px 12px;font-weight:700;color:${estadoFinal==='Devuelto'?'#059669':'#d97706'}">${estadoFinal}</td></tr>
+              <tr><td style="padding:6px 12px;color:#6b7280">Fecha préstamo:</td><td style="padding:6px 12px">${fechaPrestamo}</td></tr>
+            </table>
+            <p style="color:#6b7280;font-size:12px">Inventario Taller FP — IES El Bosco</p>
+          </div>`;
+          const mailOpts = {
+            to: [...toSet].join(','),
+            subject: `Devolución de material — ${itemNombre}`,
+            htmlBody
+          };
+          const jefeCcs2 = jefeEmails2.filter(e => !toSet.has(e));
+          if (jefeCcs2.length) mailOpts.cc = jefeCcs2.join(',');
+          MailApp.sendEmail(mailOpts);
+        }
+      } catch(emailErr) {
+        // No fatal
+      }
+
+      return json({ ok: true });
+    }
+
+    // ─── DOCUMENTOS ─────────────────────────────────────────────
+    if (action === 'getDocs') {
+      const sheet = ss.getSheetByName(SHEET_DOCS);
+      if (!sheet) return json({ ok: true, docs: [] });
+      const docs = rowsToObjects(sheet, HEADERS_DOCS).filter(d => String(d.itemId) === String(body.itemId));
+      return json({ ok: true, docs });
+    }
+
+    if (action === 'uploadDoc') {
+      const { itemId, itemNombre, aulaId, aulaName, fileName, mimeType, data } = body;
+
+      // Carpeta raíz → carpeta de aula
+      const root    = getOrCreateFolder(DriveApp.getRootFolder(), 'Inventario Departamento');
+      const aulaDir = getOrCreateFolder(root, aulaName || aulaId);
+
+      // Crear archivo con nombre único: {itemId}_{fileName}
+      const safeName = String(itemId) + '_' + fileName;
+      const blob = Utilities.newBlob(Utilities.base64Decode(data), mimeType, safeName);
+      const file = aulaDir.createFile(blob);
+      try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e) { /* restringido por Workspace */ }
+
+      // Guardar metadatos en hoja Documentos
+      let sheet = ss.getSheetByName(SHEET_DOCS);
+      if (!sheet) {
+        sheet = ss.insertSheet(SHEET_DOCS);
+        sheet.appendRow(HEADERS_DOCS);
+        sheet.getRange(1, 1, 1, HEADERS_DOCS.length).setFontWeight('bold').setBackground('#fce7f3');
+        sheet.setFrozenRows(1);
+      }
+      const docId = nextId(sheet);
+      const fecha = Utilities.formatDate(new Date(), 'GMT', 'yyyy-MM-dd');
+      sheet.appendRow([docId, itemId, itemNombre, aulaId, fileName, file.getId(), file.getUrl(), fecha]);
+      auditLog(ss, user, 'uploadDoc', itemId, `Subido documento: ${fileName}`);
+
+      return json({ ok: true, doc: { id: docId, itemId, fileName, driveId: file.getId(), driveUrl: file.getUrl(), fecha } });
+    }
+
+    if (action === 'deleteDoc') {
+      const { docId, driveId } = body;
+      try { DriveApp.getFileById(driveId).setTrashed(true); } catch(e) {}
+      const sheet = ss.getSheetByName(SHEET_DOCS);
+      let old = null;
+      if (sheet) { const r = findRowById(sheet, docId); if (r > 0) { old = sheet.getRange(r, 1, 1, HEADERS_DOCS.length).getValues()[0]; sheet.deleteRow(r); } }
+      auditLog(ss, user, 'deleteDoc', old ? old[1] : '', `Eliminado documento: ${old ? old[4] : docId}`);
+      return json({ ok: true });
+    }
+
+    // ─── PERFIL ─────────────────────────────────────────────────
+    if (action === 'updateProfile') {
+      const sheet = ss.getSheetByName(SHEET_USUARIOS);
+      const data = sheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]).trim() === String(user.usuario).trim()) {
+          sheet.getRange(i + 1, 3).setValue(body.nombre || '');
+          sheet.getRange(i + 1, 5).setValue(body.email || '');
+          auditLog(ss, user, 'updateProfile', '', `Perfil actualizado: ${body.nombre || user.usuario}`);
+          return json({ ok: true });
+        }
+      }
+      return json({ ok: false, error: 'Usuario no encontrado' });
+    }
+
+    if (action === 'changePassword') {
+      if (!body.oldPassword || !body.newPassword) return json({ ok: false, error: 'Faltan campos' });
+      if (String(body.oldPassword) !== String(body.p)) return json({ ok: false, error: 'Contraseña actual incorrecta' });
+      const sheet = ss.getSheetByName(SHEET_USUARIOS);
+      const data = sheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]).trim() === String(user.usuario).trim()) {
+          sheet.getRange(i + 1, 2).setValue(body.newPassword);
+          auditLog(ss, user, 'changePassword', '', 'Contraseña cambiada');
+          return json({ ok: true });
+        }
+      }
+      return json({ ok: false, error: 'Usuario no encontrado' });
+    }
+
+    // ─── NOTIFICAR PEDIDO ────────────────────────────────────────
+    if (action === 'notificarPedido') {
+      try {
+        const usrSheet = ss.getSheetByName(SHEET_USUARIOS);
+        const usrRows = usrSheet.getDataRange().getValues();
+        const jefeEmails3 = [];
+        for (let i = 1; i < usrRows.length; i++) {
+          if (esJefeDepartamento(usrRows[i][3])) {
+            const e = String(usrRows[i][4] || '').trim();
+            if (e) jefeEmails3.push(e);
+          }
+        }
+        if (jefeEmails3.length) {
+          const it = body.item || {};
+          const aula = it.aula || '—';
+          MailApp.sendEmail({
+            to: jefeEmails3.join(','),
+            subject: `Solicitud de compra — ${it.item || 'material'}`,
+            htmlBody: `<div style="font-family:sans-serif;max-width:500px;padding:24px;color:#1a1d2e">
+              <h2 style="color:#d97706;margin-bottom:16px">🛒 Nuevo ítem en lista de compra</h2>
+              <p>Se ha añadido un ítem a la lista de solicitud de compra:</p>
+              <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+                <tr><td style="padding:6px 12px;color:#6b7280">Material:</td><td style="padding:6px 12px;font-weight:700">${it.item||'—'}</td></tr>
+                <tr style="background:#f8fafc"><td style="padding:6px 12px;color:#6b7280">Referencia:</td><td style="padding:6px 12px;font-family:monospace">${it.ref||'—'}</td></tr>
+                <tr><td style="padding:6px 12px;color:#6b7280">Aula:</td><td style="padding:6px 12px">${aula}</td></tr>
+                <tr style="background:#f8fafc"><td style="padding:6px 12px;color:#6b7280">Stock actual:</td><td style="padding:6px 12px;color:#dc2626;font-weight:700">${it.qty}</td></tr>
+                <tr><td style="padding:6px 12px;color:#6b7280">Stock mínimo:</td><td style="padding:6px 12px">${it.min}</td></tr>
+              </table>
+              <p style="color:#6b7280;font-size:12px">Inventario Taller FP — IES El Bosco</p>
+            </div>`
+          });
+        }
+      } catch(e) {}
+      auditLog(ss, user, 'notificarPedido', (body.item || {}).id || '', `Notificado pedido: ${(body.item || {}).item || 'material'}`);
+      return json({ ok: true });
+    }
+
+    return json({ ok: false, error: 'Acción desconocida' });
+  } catch (err) {
+    return json({ ok: false, error: err.toString() });
+  }
+}
+
+// ─── DRIVE HELPER ───────────────────────────────────────────────
+function getOrCreateFolder(parent, name) {
+  const it = parent.getFoldersByName(name);
+  return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ─── INIT ────────────────────────────────────────────────────────
+function initSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const def = [
+    [SHEET_INVENTARIO, HEADERS_INV,   '#e2e6f0', null],
+    [SHEET_USUARIOS,   HEADERS_USR,   '#fef3c7', [['admin','cambiar123','Administrador','admin']]],
+    [SHEET_PROFESORES, HEADERS_PROF,  '#dcfce7', null],
+    [SHEET_PRESTAMOS,  HEADERS_PRES,  '#fce7f3', null],
+    [SHEET_AULAS,      HEADERS_AULAS, '#cffafe', AULAS_DEFAULT],
+  ];
+  for (const [name, headers, color, rows] of def) {
+    let s = ss.getSheetByName(name);
+    if (!s) s = ss.insertSheet(name);
+    if (s.getLastRow() === 0) {
+      s.appendRow(headers);
+      s.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground(color);
+      s.setFrozenRows(1);
+      if (rows) rows.forEach(r => s.appendRow(r));
+    } else {
+      ensureHeaders(s, headers);
+    }
+  }
+}
+
+function ensureHeaders(sheet, headers) {
+  if (!sheet || sheet.getLastRow() === 0) return;
+  const current = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), headers.length)).getValues()[0];
+  headers.forEach((h, idx) => {
+    if (String(current[idx] || '').trim() !== h) {
+      const found = current.findIndex(v => String(v || '').trim() === h);
+      if (found >= 0) {
+        sheet.moveColumns(sheet.getRange(1, found + 1, sheet.getMaxRows(), 1), idx + 1);
+        current.splice(idx, 0, current.splice(found, 1)[0]);
+      } else {
+        sheet.insertColumnBefore(idx + 1);
+        sheet.getRange(1, idx + 1).setValue(h).setFontWeight('bold').setBackground('#e2e6f0');
+        current.splice(idx, 0, h);
+      }
+    }
+  });
+}
