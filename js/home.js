@@ -19,24 +19,25 @@ function renderHome(){
     <div class="scard"><div class="scard-icon">🔢</div><div><div class="scard-num">${units.toLocaleString()}</div><div class="scard-lbl">unidades totales</div></div></div>
     <div class="scard${low?' scard-alert':''}" ${low?'onclick="goLowStock()" style="cursor:pointer"':''}><div class="scard-icon">⚠️</div><div><div class="scard-num" style="color:var(--red)">${low}</div><div class="scard-lbl">stock bajo</div></div></div>
     <div class="scard${mant?' scard-alert':''}" ${mant?'onclick="goMaintenance()" style="cursor:pointer"':''}><div class="scard-icon">🛠️</div><div><div class="scard-num" style="color:var(--amber)">${mant}</div><div class="scard-lbl">mantenimiento</div></div></div>`;
+  const countHtml = loading ? `<span class="ccard-count skel skel-count"></span>` : null;
   document.getElementById('gAulas').innerHTML=AULAS.map(a=>{
     const n=items.filter(x=>x.aula===a.id).length;
-    const w=items.filter(x=>x.aula===a.id&&Number(x.qty)<=Number(x.min)).length;
+    const w=loading ? 0 : items.filter(x=>x.aula===a.id&&Number(x.qty)<=Number(x.min)).length;
     return`<div class="ccard ${a.th}" onclick="goAula('${a.id}')">
-      <span class="ccard-count">${n} ítems</span>
+      ${loading ? `<span class="ccard-count skel skel-count"></span>` : `<span class="ccard-count">${n} ítems</span>`}
       <button class="ccard-edit" onclick="event.stopPropagation();openAulasModal()" title="Editar aulas">✏️</button>
       <div class="ccard-icon">${a.icon}</div>
       <div class="ccard-title">${a.name}</div>
       <div class="ccard-desc">${a.desc}${w?`<div class="ccard-warn">⚠ ${w} stock bajo</div>`:''}</div>
     </div>`;
   }).join('');
-  const catEntries=Object.entries(CATS).filter(([name])=>items.some(x=>x.cat===name));
+  const catEntries = loading ? Object.entries(CATS) : Object.entries(CATS).filter(([name])=>items.some(x=>x.cat===name));
   document.getElementById('gCats').innerHTML=catEntries.length
     ? catEntries.map(([name,c])=>{
         const n=items.filter(x=>x.cat===name).length;
-        const w=items.filter(x=>x.cat===name&&Number(x.qty)<=Number(x.min)).length;
+        const w=loading ? 0 : items.filter(x=>x.cat===name&&Number(x.qty)<=Number(x.min)).length;
         return`<div class="ccard" style="--ch:${c.c};--cbg:${c.bg}" onclick="goCat('${name.replace(/'/g,"\\'")}')">
-          <span class="ccard-count">${n} ítems</span>
+          ${loading ? `<span class="ccard-count skel skel-count"></span>` : `<span class="ccard-count">${n} ítems</span>`}
           <div class="ccard-icon">${c.i}</div>
           <div class="ccard-title">${name}</div>
           <div class="ccard-desc">${w?`<div class="ccard-warn">⚠ ${w} stock bajo</div>`:''}</div>
@@ -46,7 +47,7 @@ function renderHome(){
   document.getElementById('gCiclos').innerHTML=CICLOS.map(c=>{
     const n=items.filter(x=>x.mod && x.mod.startsWith(c.id+'__')).length;
     return`<div class="ccard ${c.th}" onclick="openCiclo('${c.id}')">
-      <span class="ccard-count">${n} ítems</span>
+      ${loading ? `<span class="ccard-count skel skel-count"></span>` : `<span class="ccard-count">${n} ítems</span>`}
       <div class="ccard-icon">${c.icon}</div>
       <div class="ccard-title">${c.name}</div>
       <div class="ccard-desc">${c.desc}</div>
