@@ -105,6 +105,7 @@ function _hideOverlay(){
 
 async function loadData(){
   if(!SESSION){ _hideOverlay(); show('pLogin'); setConn('','Sin sesión'); return; }
+  itemsLoaded = false;
   showUserChip();
   show('pH');
   setConn('loading','Cargando...');
@@ -161,6 +162,7 @@ async function loadData(){
     items = res.items || [];
     profesores = res.profesores || [];
     prestamos = res.prestamos || [];
+    itemsLoaded = true;
     setConn('ok',`${items.length} ítems · sincronizado`);
     if(typeof renderHome === 'function' && document.getElementById('pH').classList.contains('active')) renderHome();
     else if(cf) openSub();

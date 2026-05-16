@@ -5,7 +5,7 @@ function renderHome(){
   // Banner de préstamos
   renderLoanBanner();
 
-  const loading = !items.length && document.getElementById('connTxt')?.textContent.includes('inventario');
+  const loading = !itemsLoaded;
   const total=items.length;
   const low=items.filter(x=>Number(x.qty)<=Number(x.min)).length;
   const mant=items.filter(needsMaintenance).length;

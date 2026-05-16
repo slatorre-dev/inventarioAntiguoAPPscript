@@ -14,6 +14,7 @@ let eid = null;
 let currentPresTab = 'activos';
 let prestarItemId = null;
 let devolverPresId = null;
+let itemsLoaded = false;
 
 function setConn(state, txt){
   const el = document.getElementById('connStatus');
