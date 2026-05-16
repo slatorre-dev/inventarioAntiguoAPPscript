@@ -521,7 +521,7 @@ function doGet(e) {
 
     // ── action=list: datos pesados con caché 3 min ────────────────
     const cache = CacheService.getScriptCache();
-    const cacheKey = 'list_v1';
+    const cacheKey = 'list_v2';
     const cached = cache.get(cacheKey);
     if (cached) {
       try {
@@ -559,7 +559,9 @@ function doGet(e) {
       ciclos = cicloOrder.map(id => cicloMap[id]);
     }
 
-    const payload = { items, profesores, prestamos, aulas, cats, ciclos };
+    // Compresión C: ítems como array de arrays (elimina claves repetidas ~40% menos JSON)
+    const itemsCompact = items.map(it => HEADERS_INV.map(h => it[h] != null ? it[h] : ''));
+    const payload = { itemsH: HEADERS_INV, itemsC: itemsCompact, profesores, prestamos, aulas, cats, ciclos };
     try { cache.put(cacheKey, JSON.stringify(payload), 180); } catch(e) {}
 
     return json({ ok: true, ...payload, user });
@@ -570,7 +572,7 @@ function doGet(e) {
 
 // ─── POST ────────────────────────────────────────────────────────
 function invalidateCache() {
-  try { CacheService.getScriptCache().remove('list_v1'); } catch(e) {}
+  try { CacheService.getScriptCache().remove('list_v2'); } catch(e) {}
 }
 
 function doPost(e) {

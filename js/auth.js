@@ -159,7 +159,12 @@ async function loadData(){
   try{
     const res = await apiGet('list');
     if(!res.ok) throw new Error(res.error||'Error');
-    items = res.items || [];
+    // Descomprimir formato compacto (array de arrays → objetos)
+    if(res.itemsC && res.itemsH){
+      items = res.itemsC.map(row => Object.fromEntries(res.itemsH.map((h,i) => [h, row[i]])));
+    } else {
+      items = res.items || [];
+    }
     profesores = res.profesores || [];
     prestamos = res.prestamos || [];
     itemsLoaded = true;
